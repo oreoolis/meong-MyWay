@@ -44,8 +44,8 @@ export function SignIn2({
           Sign in with email
         </h2>
         <p className="text-gray-500 text-sm mb-6 text-center">
-          Upload your resume and let MyWay&apos;s agents map your next career
-          move — for free.
+          Upload your resume and let MyWay map your next career
+          move.
         </p>
         <div className="w-full flex flex-col gap-3 mb-2">
           <div className="relative">
