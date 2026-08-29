@@ -18,11 +18,11 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all",
+        "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all",
         "disabled:cursor-not-allowed disabled:opacity-45",
         size === "md" ? "h-11 px-5 text-sm" : "h-9 px-3.5 text-[13px]",
         variant === "primary" &&
-          "bg-accent text-accent-ink shadow-sm hover:brightness-110 active:brightness-95 disabled:hover:brightness-100",
+          "bg-gradient-to-b from-gray-700 to-gray-900 text-accent-ink shadow-sm hover:brightness-110 active:brightness-95 disabled:hover:brightness-100",
         variant === "secondary" &&
           "border border-hairline bg-surface text-ink hover:bg-raised",
         variant === "ghost" && "text-ink-2 hover:bg-raised hover:text-ink",

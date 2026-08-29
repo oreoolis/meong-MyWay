@@ -14,12 +14,13 @@ import { parseResume, planCareers } from "@/lib/mock-agents";
 import { sleep } from "@/lib/utils";
 
 import { AppHeader, STEPS } from "./app-header";
+import { LandingStage } from "./stages/landing-stage";
 import { SignInStage } from "./stages/sign-in-stage";
 import { UploadStage } from "./stages/upload-stage";
 import { AnalysisStage } from "./stages/analysis-stage";
 import { ResultsStage } from "./stages/results-stage";
 
-type Stage = "signin" | "upload" | "analysis" | "results";
+type Stage = "landing" | "signin" | "upload" | "analysis" | "results";
 
 /** Derive an agent's card state from its own step list. */
 function cardState(steps: AgentStep[]): AgentCardState {
@@ -29,7 +30,7 @@ function cardState(steps: AgentStep[]): AgentCardState {
 }
 
 export function Workspace() {
-  const [stage, setStage] = useState<Stage>("signin");
+  const [stage, setStage] = useState<Stage>("landing");
   const [session, setSession] = useState<Session | null>(null);
   const [file, setFile] = useState<File | null>(null);
 
@@ -107,7 +108,7 @@ export function Workspace() {
     setProfile(null);
     setPlan(null);
     setError(null);
-    setStage("signin");
+    setStage("landing");
   }
 
   function handleAnalyze(consented: boolean) {
@@ -128,17 +129,32 @@ export function Workspace() {
   }
 
   const activeIndex = STEPS.findIndex((s) => s.key === stage);
+  const isPreAuth = stage === "landing" || stage === "signin";
 
   return (
     <div className="flex min-h-full flex-col">
-      <AppHeader
-        session={session}
-        activeIndex={activeIndex}
-        onSignOut={handleSignOut}
-      />
+      {!isPreAuth ? (
+        <AppHeader
+          session={session}
+          activeIndex={activeIndex}
+          onSignOut={handleSignOut}
+        />
+      ) : null}
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-10 sm:px-8 sm:py-14">
-        {stage === "signin" ? <SignInStage onSignIn={handleSignIn} /> : null}
+      <main
+        className={
+          isPreAuth
+            ? "flex-1"
+            : "mx-auto w-full max-w-5xl flex-1 px-5 py-10 sm:px-8 sm:py-14"
+        }
+      >
+        {stage === "landing" ? (
+          <LandingStage onGetStarted={() => setStage("signin")} />
+        ) : null}
+
+        {stage === "signin" ? (
+          <SignInStage onSignIn={handleSignIn} onBack={() => setStage("landing")} />
+        ) : null}
 
         {stage === "upload" ? (
           <UploadStage

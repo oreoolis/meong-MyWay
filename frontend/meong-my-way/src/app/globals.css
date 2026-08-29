@@ -1,39 +1,38 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   Design tokens.
-   Light values live on bare :root; dark redefines only what changes, under
-   both the OS media query and an explicit [data-theme="dark"] stamp.
-   Status colors are fixed across modes by design and never themed.
+   Design tokens. One light palette, deliberately — every stage (including
+   the sign-in card, which hardcodes bg-white to match its source template)
+   assumes this, so there is no dark variant to fall out of sync with it.
 --------------------------------------------------------------------------- */
 
 :root {
   color-scheme: light;
 
-  --plane: #f9f9f7;
-  --surface-1: #fcfcfb;
-  --surface-2: #f2f2ef;
+  --plane: #ffffff;
+  --surface-1: #ffffff;
+  --surface-2: #f9fafb;
 
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted: #898781;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
 
-  --hairline: #e1e0d9;
-  --baseline: #c3c2b7;
+  --hairline: #e5e7eb;
+  --baseline: #d1d5db;
 
-  --accent: #2a78d6;
+  --accent: #3b82f6;
   --accent-ink: #ffffff;
-  --accent-wash: #e8f1fd;
+  --accent-wash: #f0f9ff;
   /* Meter track: a lighter step of the accent's own ramp, so filled and
      unfilled read as one scale rather than two colors. */
-  --track: #cde2fb;
+  --track: #dbeafe;
 
-  --cat-progression: #2a78d6;
+  --cat-progression: #3b82f6;
   --cat-adjacent: #eb6834;
   --cat-pivot: #1baf7a;
 
-  --shadow-card: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 24px -12px rgba(11, 11, 11, 0.12);
-  --shadow-lift: 0 2px 4px rgba(11, 11, 11, 0.05), 0 16px 40px -16px rgba(11, 11, 11, 0.18);
+  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px -12px rgba(17, 24, 39, 0.12);
+  --shadow-lift: 0 2px 4px rgba(17, 24, 39, 0.05), 0 16px 40px -16px rgba(17, 24, 39, 0.18);
 }
 
 /* Status palette — fixed, never themed. Always shipped with an icon + label
@@ -43,62 +42,6 @@
   --status-warning: #fab219;
   --status-serious: #ec835a;
   --status-critical: #d03b3b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-
-    --plane: #0d0d0d;
-    --surface-1: #1a1a19;
-    --surface-2: #232322;
-
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
-
-    --hairline: #2c2c2a;
-    --baseline: #383835;
-
-    --accent: #3987e5;
-    --accent-ink: #ffffff;
-    --accent-wash: #16243a;
-    --track: #184f95;
-
-    --cat-progression: #3987e5;
-    --cat-adjacent: #d95926;
-    --cat-pivot: #199e70;
-
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
-    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.45), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
-  }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-
-  --plane: #0d0d0d;
-  --surface-1: #1a1a19;
-  --surface-2: #232322;
-
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
-
-  --hairline: #2c2c2a;
-  --baseline: #383835;
-
-  --accent: #3987e5;
-  --accent-ink: #ffffff;
-  --accent-wash: #16243a;
-  --track: #184f95;
-
-  --cat-progression: #3987e5;
-  --cat-adjacent: #d95926;
-  --cat-pivot: #199e70;
-
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
-  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.45), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
 }
 
 @theme inline {

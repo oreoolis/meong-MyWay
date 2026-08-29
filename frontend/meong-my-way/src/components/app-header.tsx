@@ -5,10 +5,7 @@ import { Stepper, type StepperItem } from "@/components/ui/stepper";
 import { SparkIcon } from "@/components/ui/icons";
 
 export const STEPS: StepperItem[] = [
-  { key: "signin", label: "Sign in" },
-  { key: "upload", label: "Upload resume" },
-  { key: "analysis", label: "Agents" },
-  { key: "results", label: "Your paths" },
+  { key: "signin", label: "Sign in" }
 ];
 
 export function AppHeader({
