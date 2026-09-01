@@ -1,10 +1,11 @@
 import { SignIn2 } from "@/components/ui/clean-minimal-sign-in";
+import type { AuthenticatedUser } from "@/lib/auth/client";
 
 export function SignInStage({
   onSignIn,
   onBack,
 }: {
-  onSignIn: (email: string) => void;
+  onSignIn: (user: AuthenticatedUser) => void;
   onBack: () => void;
 }) {
   return (

@@ -12,6 +12,11 @@ import type {
 import type { AgentCardState } from "@/components/ui/agent-trace";
 import { parseResume, planCareers } from "@/lib/mock-agents";
 import { sleep } from "@/lib/utils";
+import {
+  restoreAuthenticatedUser,
+  signOutCurrentUser,
+  type AuthenticatedUser,
+} from "@/lib/auth/client";
 
 import { AppHeader, STEPS } from "./app-header";
 import { LandingStage } from "./stages/landing-stage";
@@ -42,8 +47,21 @@ export function Workspace() {
 
   const abortRef = useRef<AbortController | null>(null);
 
-  // Abandon any in-flight run if the component goes away.
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    let cancelled = false;
+
+    void restoreAuthenticatedUser().then((user) => {
+      if (!cancelled && user) {
+        setSession({ ...user, storageConsent: false });
+        setStage("upload");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const report = useCallback((agent: AgentId, steps: AgentStep[]) => {
     if (agent === "parser") setParserSteps(steps);
@@ -89,26 +107,28 @@ export function Workspace() {
     [report],
   );
 
-  function handleSignIn(email: string) {
+  function handleSignIn(user: AuthenticatedUser) {
     setSession({
-      userId: crypto.randomUUID(),
-      email,
-      displayName: email.split("@")[0],
+      ...user,
       storageConsent: false,
     });
     setStage("upload");
   }
 
-  function handleSignOut() {
-    abortRef.current?.abort();
-    setSession(null);
-    setFile(null);
-    setParserSteps([]);
-    setPlannerSteps([]);
-    setProfile(null);
-    setPlan(null);
-    setError(null);
-    setStage("landing");
+  async function handleSignOut() {
+    try {
+      await signOutCurrentUser();
+    } finally {
+      abortRef.current?.abort();
+      setSession(null);
+      setFile(null);
+      setParserSteps([]);
+      setPlannerSteps([]);
+      setProfile(null);
+      setPlan(null);
+      setError(null);
+      setStage("landing");
+    }
   }
 
   function handleAnalyze(consented: boolean) {
@@ -137,7 +157,7 @@ export function Workspace() {
         <AppHeader
           session={session}
           activeIndex={activeIndex}
-          onSignOut={handleSignOut}
+          onSignOut={() => void handleSignOut()}
         />
       ) : null}
 
