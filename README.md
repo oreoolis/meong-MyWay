@@ -4,9 +4,10 @@ Upload a resume, and two agents work in sequence: a **Resume Parser** that reads
 document into a structured profile, and a **Career Planner** that maps that profile
 against a realistic current trajectory plus alternative career paths.
 
-> **Status: frontend MVP.** The agents are mocked in the browser and nothing is
-> persisted — there is no database or backend wired up yet. The UI is complete and
-> demoable end to end.
+> **Status: frontend MVP with Cognito-ready authentication.** The agents are
+> mocked in the browser and resume data is not persisted. Email registration,
+> confirmation, login, MFA challenges, logout, and server-side JWT verification
+> are implemented; live authentication requires Cognito pool identifiers.
 
 ---
 
@@ -65,8 +66,9 @@ The whole app is a **single route** (`/`) — the URL never changes. Each phase 
 state of the `<Workspace/>` machine, which keeps the uploaded `File` object alive
 for the entire flow.
 
-1. **Sign in** — authentication is faked. Any valid-looking email and a password of
-   6+ characters will get you in. No account is created and nothing leaves the browser.
+1. **Sign in** — the existing card uses Amazon Cognito through Amplify Auth. Until
+   Cognito is configured, it shows a configuration message rather than faking a
+   session. See [the Cognito setup guide](docs/auth/cognito.md).
 2. **Upload a resume** — drag and drop, or browse. Accepts PDF/DOC/DOCX up to 5 MB.
    Any real file works; its name, size and type are read client-side and carried
    through the rest of the flow.
@@ -146,5 +148,5 @@ a text label, so severity never depends on color alone.
 
 - [ ] Backend service and the real agent implementations
 - [ ] Database: user accounts, resume file storage, embedding vectors
-- [ ] Real authentication
+- [ ] Provision and connect the hackathon AWS Cognito user pool
 - [ ] Live salary and demand data (currently illustrative fixture values)
