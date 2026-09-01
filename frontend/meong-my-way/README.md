@@ -2,7 +2,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+Navigate to the correct directory:
+
+```bash
+cd frontend/meong-my-way
+```
+
+Install the required packages:
+
+```bash
+npm install
+```
+
+Next, run the development server:
 
 ```bash
 npm run dev
