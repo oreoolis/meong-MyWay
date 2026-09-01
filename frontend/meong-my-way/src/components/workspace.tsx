@@ -10,13 +10,15 @@ import type {
   Session,
 } from "@/lib/contracts";
 import type { AgentCardState } from "@/components/ui/agent-trace";
-import { parseResume, planCareers } from "@/lib/mock-agents";
 import { sleep } from "@/lib/utils";
 import {
   restoreAuthenticatedUser,
   signOutCurrentUser,
   type AuthenticatedUser,
 } from "@/lib/auth/client";
+import { fetchStoredResume } from "@/lib/resume/client";
+import { runResumePipeline, type PipelinePhase } from "@/lib/resume/pipeline";
+import type { StoredResume } from "@/lib/resume/types";
 
 import { AppHeader, STEPS } from "./app-header";
 import { LandingStage } from "./stages/landing-stage";
@@ -39,29 +41,46 @@ export function Workspace() {
   const [session, setSession] = useState<Session | null>(null);
   const [file, setFile] = useState<File | null>(null);
 
+  const [storageSteps, setStorageSteps] = useState<AgentStep[]>([]);
   const [parserSteps, setParserSteps] = useState<AgentStep[]>([]);
   const [plannerSteps, setPlannerSteps] = useState<AgentStep[]>([]);
+  const [phase, setPhase] = useState<PipelinePhase>("uploading");
+  const [storedResume, setStoredResume] = useState<StoredResume | null>(null);
   const [profile, setProfile] = useState<ResumeProfile | null>(null);
   const [plan, setPlan] = useState<CareerPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
+  /** Load whatever this user already has on file, so they can replace it. */
+  const loadStoredResume = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setStoredResume(await fetchStoredResume(signal));
+    } catch {
+      // Not being able to read the previous upload must not block a new one.
+      setStoredResume(null);
+    }
+  }, []);
+
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
 
-    void restoreAuthenticatedUser().then((user) => {
-      if (!cancelled && user) {
-        setSession({ ...user, storageConsent: false });
-        setStage("upload");
-      }
+    void restoreAuthenticatedUser().then(async (user) => {
+      if (cancelled || !user) return;
+      setSession({ ...user, storageConsent: false });
+      setStage("upload");
+      await loadStoredResume(controller.signal);
     });
 
     return () => {
       cancelled = true;
+      controller.abort();
       abortRef.current?.abort();
     };
-  }, []);
+  }, [loadStoredResume]);
 
   const report = useCallback((agent: AgentId, steps: AgentStep[]) => {
     if (agent === "parser") setParserSteps(steps);
@@ -74,45 +93,60 @@ export function Workspace() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      setStorageSteps([]);
       setParserSteps([]);
       setPlannerSteps([]);
       setProfile(null);
       setPlan(null);
       setError(null);
+      setUploadError(null);
+      setPhase("uploading");
+      setBusy(true);
       setStage("analysis");
 
       try {
-        // Agent 1 reads the document and produces the structured profile.
-        const parsed = await parseResume(resume, report, controller.signal);
-        setProfile(parsed);
+        await runResumePipeline(
+          resume,
+          {
+            onAgentSteps: report,
+            onStorageSteps: setStorageSteps,
+            onPhase: setPhase,
+            onStored: setStoredResume,
+            onProfile: setProfile,
+            onPlan: setPlan,
+          },
+          controller.signal,
+        );
 
-        // A visible beat so the handoff between agents reads as a handoff.
-        await sleep(700, controller.signal);
-
-        // Agent 2 takes that profile — and only that profile — as its input.
-        const generated = await planCareers(parsed, report, controller.signal);
-        setPlan(generated);
-
-        await sleep(600, controller.signal);
+        await sleep(400, controller.signal);
         setStage("results");
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(
+
+        const message =
           err instanceof Error
             ? err.message
-            : "The agents failed to finish. Try running them again.",
-        );
+            : "The agents failed to finish. Try running them again.";
+
+        // A rejected upload belongs next to the file picker, not on a stage
+        // the run never really reached.
+        if (phaseFailedBeforeAgents(err)) {
+          setUploadError(message);
+          setStage("upload");
+        } else {
+          setError(message);
+        }
+      } finally {
+        setBusy(false);
       }
     },
     [report],
   );
 
   function handleSignIn(user: AuthenticatedUser) {
-    setSession({
-      ...user,
-      storageConsent: false,
-    });
+    setSession({ ...user, storageConsent: false });
     setStage("upload");
+    void loadStoredResume();
   }
 
   async function handleSignOut() {
@@ -122,11 +156,14 @@ export function Workspace() {
       abortRef.current?.abort();
       setSession(null);
       setFile(null);
+      setStorageSteps([]);
       setParserSteps([]);
       setPlannerSteps([]);
+      setStoredResume(null);
       setProfile(null);
       setPlan(null);
       setError(null);
+      setUploadError(null);
       setStage("landing");
     }
   }
@@ -140,11 +177,13 @@ export function Workspace() {
   function handleStartOver() {
     abortRef.current?.abort();
     setFile(null);
+    setStorageSteps([]);
     setParserSteps([]);
     setPlannerSteps([]);
     setProfile(null);
     setPlan(null);
     setError(null);
+    setUploadError(null);
     setStage("upload");
   }
 
@@ -179,8 +218,14 @@ export function Workspace() {
         {stage === "upload" ? (
           <UploadStage
             file={file}
-            onFileChange={setFile}
+            onFileChange={(next) => {
+              setUploadError(null);
+              setFile(next);
+            }}
             onAnalyze={handleAnalyze}
+            storedResume={storedResume}
+            uploadError={uploadError}
+            busy={busy}
           />
         ) : null}
 
@@ -193,6 +238,9 @@ export function Workspace() {
             profile={profile}
             error={error}
             onRetry={() => file && void runPipeline(file)}
+            phase={phase}
+            storageSteps={storageSteps}
+            storedResume={storedResume}
           />
         ) : null}
 
@@ -207,10 +255,26 @@ export function Workspace() {
 
       <footer className="border-t border-hairline px-5 py-6 sm:px-8">
         <p className="mx-auto w-full max-w-5xl text-[12px] text-ink-muted">
-          MyWay — agentic career switching. MVP build with mocked agents and no
-          persistence.
+          MyWay — agentic career switching. Resumes are stored in S3 and
+          DynamoDB; the two agents are still mocked.
         </p>
       </footer>
     </div>
+  );
+}
+
+/**
+ * Whether a failure happened during the upload rather than inside an agent.
+ *
+ * Upload failures are the user's to fix (wrong file type, expired session), so
+ * they belong back on the upload stage; agent failures are ours, and stay on
+ * the analysis stage with a retry.
+ */
+function phaseFailedBeforeAgents(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    (error as { name: unknown }).name === "ResumeRequestError"
   );
 }

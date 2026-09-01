@@ -2,9 +2,12 @@
 
 import type { AgentStep, ResumeProfile } from "@/lib/contracts";
 import { AgentTrace, type AgentCardState } from "@/components/ui/agent-trace";
+import { RetroOfficeLoader } from "@/components/ui/retro-office";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ArrowRightIcon, DocumentIcon, RouteIcon } from "@/components/ui/icons";
-import { cn } from "@/lib/utils";
+import type { PipelinePhase } from "@/lib/resume/pipeline";
+import type { StoredResume } from "@/lib/resume/types";
+import { cn, formatBytes } from "@/lib/utils";
 
 export function AnalysisStage({
   parserSteps,
@@ -14,6 +17,9 @@ export function AnalysisStage({
   profile,
   error,
   onRetry,
+  phase,
+  storageSteps,
+  storedResume,
 }: {
   parserSteps: AgentStep[];
   plannerSteps: AgentStep[];
@@ -22,17 +28,34 @@ export function AnalysisStage({
   profile: ResumeProfile | null;
   error: string | null;
   onRetry: () => void;
+  /** Where the run currently is; drives the retro loading screen. */
+  phase: PipelinePhase;
+  storageSteps: AgentStep[];
+  storedResume: StoredResume | null;
 }) {
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
       <SectionLabel>Step 3</SectionLabel>
       <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-        Two agents, working in sequence
+        Your resume, moving down the line
       </h1>
       <p className="mt-2 max-w-2xl text-[14.5px] leading-relaxed text-ink-2">
-        The parser reads your resume into a structured profile. That profile is
-        the planner&apos;s only input — it never sees the raw file.
+        It is stored first, then the parser reads it into a structured profile.
+        That profile is the planner&apos;s only input — it never sees the raw file.
       </p>
+
+      {/* The pipeline as a loading screen: three clerks passing one document. */}
+      {!error ? (
+        <RetroOfficeLoader
+          phase={phase}
+          storageSteps={storageSteps}
+          parserSteps={parserSteps}
+          plannerSteps={plannerSteps}
+          className="mt-6"
+        />
+      ) : null}
+
+      {storedResume ? <StoredReceipt resume={storedResume} /> : null}
 
       {error ? (
         <div
@@ -47,7 +70,18 @@ export function AnalysisStage({
         </div>
       ) : null}
 
-      <div className="mt-7 grid gap-4 lg:grid-cols-[1fr_auto_1fr] lg:items-stretch">
+      {/* Storage runs first and on its own — the agents only start once the
+          resume is safely stored. */}
+      <AgentTrace
+        name="Resume Store"
+        role="S3 object + DynamoDB record"
+        icon={<DocumentIcon className="h-4.5 w-4.5" />}
+        steps={storageSteps}
+        state={traceState(storageSteps)}
+        className="mt-4"
+      />
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_auto_1fr] lg:items-stretch">
         <AgentTrace
           name="Resume Parser"
           role="Agent 1 · reads and embeds the document"
@@ -84,6 +118,26 @@ export function AnalysisStage({
       </div>
 
       {profile ? <HandoffPanel profile={profile} /> : null}
+    </div>
+  );
+}
+
+/** Derive a card state from a step list, matching the agent cards' rule. */
+function traceState(steps: AgentStep[]): AgentCardState {
+  if (steps.length === 0) return "idle";
+  if (steps.every((s) => s.status === "done")) return "done";
+  return "running";
+}
+
+/** Proof the resume really landed in S3 and DynamoDB, not just that it parsed. */
+function StoredReceipt({ resume }: { resume: StoredResume }) {
+  return (
+    <div className="mw-fade mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-hairline bg-raised px-4 py-3">
+      <span className="text-[12.5px] font-medium text-ink">Stored</span>
+      <span className="font-mono text-[11.5px] text-ink-2">{resume.s3Key}</span>
+      <span className="font-mono text-[11.5px] text-ink-muted">
+        {resume.format.toUpperCase()} · {formatBytes(resume.sizeBytes)}
+      </span>
     </div>
   );
 }
