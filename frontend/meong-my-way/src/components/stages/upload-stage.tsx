@@ -10,17 +10,31 @@ import {
   UploadIcon,
   XIcon,
 } from "@/components/ui/icons";
-import { MAX_FILE_BYTES, validateResumeFile } from "@/lib/mock-agents";
+import {
+  MAX_RESUME_BYTES,
+  RESUME_ACCEPT_ATTRIBUTE,
+  RESUME_FORMATS_LABEL,
+  validateResumeUpload,
+} from "@/lib/resume/file-policy";
+import type { StoredResume } from "@/lib/resume/types";
 import { cn, formatBytes } from "@/lib/utils";
 
 export function UploadStage({
   file,
   onFileChange,
   onAnalyze,
+  storedResume,
+  uploadError,
+  busy = false,
 }: {
   file: File | null;
   onFileChange: (file: File | null) => void;
   onAnalyze: (consented: boolean) => void;
+  /** What is already on the user's account, if anything. */
+  storedResume?: StoredResume | null;
+  /** A failure reported by the server on the last attempt. */
+  uploadError?: string | null;
+  busy?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,10 +44,12 @@ export function UploadStage({
   function accept(candidate: File | undefined) {
     if (!candidate) return;
 
-    const problem = validateResumeFile(candidate);
+    // Rejected here, before any request — nothing reaches S3 or DynamoDB.
+    const problem = validateResumeUpload(candidate);
     if (problem) {
       setError(problem);
       onFileChange(null);
+      if (inputRef.current) inputRef.current.value = "";
       return;
     }
 
@@ -53,18 +69,23 @@ export function UploadStage({
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  const replacing = Boolean(storedResume);
+  const shownError = error ?? uploadError ?? null;
+
   return (
     <div className="mw-rise mx-auto w-full max-w-2xl">
       <SectionLabel>Step 2</SectionLabel>
       <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-        Upload your resume
+        {replacing ? "Replace your resume" : "Upload your resume"}
       </h1>
       <p className="mt-2 text-[14.5px] leading-relaxed text-ink-2">
-        One file is enough. The parser agent reads it, then hands what it finds
-        to the career planner.
+        One file is enough. It is stored on your account, then the parser agent
+        reads it and hands what it finds to the career planner.
       </p>
 
-      <Card className="mt-7 p-5 sm:p-6">
+      {storedResume ? <StoredResumeNotice resume={storedResume} /> : null}
+
+      <Card className="mt-5 p-5 sm:p-6">
         {file ? (
           <FileCard file={file} onRemove={clearFile} />
         ) : (
@@ -93,7 +114,7 @@ export function UploadStage({
               Drop your resume here
             </p>
             <p className="mt-1 text-[13px] text-ink-2">
-              PDF or Word · up to {formatBytes(MAX_FILE_BYTES)}
+              {RESUME_FORMATS_LABEL} only · up to {formatBytes(MAX_RESUME_BYTES)}
             </p>
 
             <Button
@@ -109,16 +130,16 @@ export function UploadStage({
             <input
               ref={inputRef}
               type="file"
-              accept=".pdf,.doc,.docx,application/pdf"
+              accept={RESUME_ACCEPT_ATTRIBUTE}
               className="sr-only"
               onChange={(e) => accept(e.target.files?.[0])}
             />
           </div>
         )}
 
-        {error ? (
+        {shownError ? (
           <p role="alert" className="mt-4 text-[13px] text-critical">
-            {error}
+            {shownError}
           </p>
         ) : null}
 
@@ -133,24 +154,54 @@ export function UploadStage({
             <span className="font-medium text-ink">
               Store this resume and its embeddings on my account.
             </span>{" "}
-            Required so the planner can re-run without a re-upload. In this
-            build nothing is persisted — there is no database connected yet.
+            The file goes to S3 and its metadata to DynamoDB, so the planner can
+            re-run when you sign back in without a re-upload.
           </span>
         </label>
 
         <Button
           className="mt-5 w-full"
-          disabled={!file || !consent}
+          disabled={!file || !consent || busy}
           onClick={() => onAnalyze(consent)}
         >
-          Run the agents
-          <ArrowRightIcon className="h-4 w-4" />
+          {busy
+            ? "Uploading…"
+            : replacing
+              ? "Replace and re-run the agents"
+              : "Run the agents"}
+          {busy ? null : <ArrowRightIcon className="h-4 w-4" />}
         </Button>
       </Card>
 
       <p className="mt-4 flex items-center justify-center gap-2 text-[12px] text-ink-muted">
         <LockIcon className="h-3.5 w-3.5" />
-        Your file stays in this browser tab for the whole demo.
+        Only you can read your stored resume — it is keyed to your account.
+      </p>
+    </div>
+  );
+}
+
+/** What is already on file, so replacing it is a deliberate act. */
+function StoredResumeNotice({ resume }: { resume: StoredResume }) {
+  return (
+    <div className="mw-fade mt-5 rounded-xl border border-hairline bg-raised p-4">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent">
+          <DocumentIcon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium text-ink">
+            On your account: <span className="font-normal">{resume.fileName}</span>
+          </p>
+          <p className="mt-0.5 text-[12px] text-ink-2">
+            {resume.format.toUpperCase()} · {formatBytes(resume.sizeBytes)} ·
+            uploaded {new Date(resume.uploadedAt).toLocaleDateString()}
+          </p>
+        </div>
+      </div>
+      <p className="mt-3 text-[12.5px] leading-relaxed text-ink-2">
+        Uploading a new file replaces this one and gives the agents a different
+        resume to work from.
       </p>
     </div>
   );
