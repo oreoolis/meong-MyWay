@@ -1,6 +1,6 @@
 /**
- * Inline icon set. Kept local rather than pulling in an icon package — the app
- * needs a dozen glyphs and they all inherit `currentColor`.
+ * Inline icon set. Kept local rather than pulling in an icon package, since
+ * the app needs a dozen glyphs and they all inherit `currentColor`.
  */
 
 type IconProps = {

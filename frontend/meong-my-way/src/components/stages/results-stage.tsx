@@ -87,7 +87,7 @@ export function ResultsStage({
         </div>
 
         <div className="border-t border-hairline pt-5 sm:border-l sm:border-t-0 sm:pl-10 sm:pt-0">
-          {/* Hero figure — proportional figures, same sans as everything else. */}
+          {/* Hero figure: proportional figures, same sans as everything else. */}
           <p className="text-[52px] font-semibold leading-none tracking-tight text-ink">
             {strongest.matchScore}
           </p>
@@ -139,7 +139,7 @@ export function ResultsStage({
 
       <p className="mt-2 text-[13.5px] leading-relaxed text-ink-2">
         Ordered by how close each one sits to your resume. A lower match is not a
-        worse path — it is a longer one.
+        worse path. It is a longer one.
       </p>
 
       <div className="mt-5 space-y-4">

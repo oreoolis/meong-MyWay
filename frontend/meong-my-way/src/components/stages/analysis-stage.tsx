@@ -41,7 +41,7 @@ export function AnalysisStage({
       </h1>
       <p className="mt-2 max-w-2xl text-[14.5px] leading-relaxed text-ink-2">
         It is stored first, then the parser reads it into a structured profile.
-        That profile is the planner&apos;s only input — it never sees the raw file.
+        That profile is the planner&apos;s only input. It never sees the raw file.
       </p>
 
       {/* The pipeline as a loading screen: three clerks passing one document. */}
@@ -70,7 +70,7 @@ export function AnalysisStage({
         </div>
       ) : null}
 
-      {/* Storage runs first and on its own — the agents only start once the
+      {/* Storage runs first and on its own. The agents only start once the
           resume is safely stored. */}
       <AgentTrace
         name="Resume Store"

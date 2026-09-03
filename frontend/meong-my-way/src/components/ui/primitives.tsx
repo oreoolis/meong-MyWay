@@ -103,7 +103,7 @@ export function Chip({
 }
 
 /* -------------------------------------------------------------------------
- * Meter — a single ratio against a limit.
+ * Meter: a single ratio against a limit.
  *
  * Per the viz rules: the unfilled track is a lighter step of the fill's own
  * ramp so the whole bar reads as one scale, the fill takes a 4px rounded
@@ -174,7 +174,7 @@ export function Meter({
 }
 
 /* -------------------------------------------------------------------------
- * Stat tile — label / value, optionally with a footnote.
+ * Stat tile: label / value, optionally with a footnote.
  * ---------------------------------------------------------------------- */
 
 export function StatTile({

@@ -8,7 +8,7 @@ const VALUE_PROPS = [
     icon: <SparkIcon className="h-5 w-5" />,
     label: "Understand",
     title: "Your resume, actually read",
-    body: "The parser agent pulls out your skills, seniority and domain — not just keywords.",
+    body: "The parser agent pulls out your skills, seniority, and domain, not just keywords.",
   },
   {
     icon: <RouteIcon className="h-5 w-5" />,
