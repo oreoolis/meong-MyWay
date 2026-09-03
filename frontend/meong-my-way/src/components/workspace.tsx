@@ -187,6 +187,25 @@ export function Workspace() {
     setStage("upload");
   }
 
+  function handleHome() {
+    abortRef.current?.abort();
+    setBusy(false);
+    setError(null);
+    setUploadError(null);
+    setStage("landing");
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+
+  function handleGetStarted() {
+    if (session) {
+      setStage("upload");
+      void loadStoredResume();
+      return;
+    }
+
+    setStage("signin");
+  }
+
   const activeIndex = STEPS.findIndex((s) => s.key === stage);
   const isPreAuth = stage === "landing" || stage === "signin";
 
@@ -196,6 +215,7 @@ export function Workspace() {
         <AppHeader
           session={session}
           activeIndex={activeIndex}
+          onHome={handleHome}
           onSignOut={() => void handleSignOut()}
         />
       ) : null}
@@ -208,7 +228,7 @@ export function Workspace() {
         }
       >
         {stage === "landing" ? (
-          <LandingStage onGetStarted={() => setStage("signin")} />
+          <LandingStage onGetStarted={handleGetStarted} />
         ) : null}
 
         {stage === "signin" ? (
