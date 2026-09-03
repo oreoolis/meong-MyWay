@@ -13,23 +13,30 @@ export const STEPS: StepperItem[] = [
 export function AppHeader({
   session,
   activeIndex,
+  onHome,
   onSignOut,
 }: {
   session: Session | null;
   activeIndex: number;
+  onHome: () => void;
   onSignOut: () => void;
 }) {
   return (
     <header className="sticky top-0 z-10 border-b border-hairline bg-plane shadow-[var(--shadow-card)]">
       <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-6 px-5 sm:px-8">
-        <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={onHome}
+          className="group flex items-center gap-2.5 rounded-lg"
+          aria-label="Go to MyWay home"
+        >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-ink">
             <SparkIcon className="h-4 w-4" />
           </span>
-          <span className="text-[15px] font-semibold tracking-tight text-ink">
+          <span className="text-[15px] font-semibold tracking-tight text-ink transition-colors group-hover:text-accent">
             MyWay
           </span>
-        </div>
+        </button>
 
         {session ? (
           <div className="flex items-center gap-3">

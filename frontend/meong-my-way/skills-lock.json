@@ -1,12 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "aws-auth": {
-      "source": "aws/agent-toolkit-for-aws",
-      "sourceType": "github",
-      "skillPath": "skills/core-skills/aws-auth/SKILL.md",
-      "computedHash": "0296ac06b9cd9f504c1f9578417390442a24d9c7fb0a28b1f0a7d868d9360437"
-    },
     "frontend-design": {
       "source": "anthropics/skills",
       "sourceType": "github",
