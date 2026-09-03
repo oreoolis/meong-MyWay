@@ -24,10 +24,28 @@ read_output() {
   terraform -chdir="$iac_dir" output -raw "$1" 2>/dev/null || echo ""
 }
 
+# Carry a hand-entered value through the regeneration below.
+#
+# This file is rewritten wholesale, but the SkillsFuture credentials are pasted
+# in by hand and exist nowhere else — Terraform does not know them, so without
+# this they would be silently lost on every sync.
+carry_forward() {
+  [ -f "$env_file" ] || return 0
+  sed -n "s/^$1=\(.*\)$/\1/p" "$env_file" | tail -n 1
+}
+
 bucket="$(read_output s3_bucket_name)"
 resumes_table="$(read_output dynamodb_resumes_table_name)"
+analyses_table="$(read_output dynamodb_analyses_table_name)"
+bedrock_region="$(read_output bedrock_region)"
+reasoning_model="$(read_output bedrock_reasoning_model_id)"
+embedding_model="$(read_output bedrock_embedding_model_id)"
+
 region="$(grep -E '^\s*default\s*=' "$iac_dir/variables.tf" | sed -n '1s/.*"\(.*\)".*/\1/p')"
 region="${region:-us-east-1}"
+
+ssg_client_id="$(carry_forward SSG_CLIENT_ID)"
+ssg_client_secret="$(carry_forward SSG_CLIENT_SECRET)"
 
 missing=0
 if [ -z "$bucket" ]; then
@@ -37,6 +55,11 @@ fi
 if [ -z "$resumes_table" ]; then
   echo "WARN: no dynamodb_resumes_table_name output — the resumes table has not" >&2
   echo "      been applied yet. Run 'terraform -chdir=iac apply'." >&2
+  missing=1
+fi
+if [ -z "$analyses_table" ]; then
+  echo "WARN: no dynamodb_analyses_table_name output — the analyses table has" >&2
+  echo "      not been applied yet. Run 'terraform -chdir=iac apply'." >&2
   missing=1
 fi
 
@@ -50,15 +73,32 @@ cat > "$env_file" <<EOF
 AWS_REGION=$region
 S3_BUCKET_NAME=$bucket
 DYNAMODB_RESUMES_TABLE=$resumes_table
+DYNAMODB_ANALYSES_TABLE=$analyses_table
 
-# Credentials intentionally omitted. The SDK reads ~/.aws/credentials via its
-# default provider chain, so the sandbox login is refreshed in exactly one
+# Amazon Bedrock — where the five agents run.
+BEDROCK_REGION=${bedrock_region:-$region}
+BEDROCK_REASONING_MODEL_ID=${reasoning_model:-amazon.nova-lite-v1:0}
+BEDROCK_EMBEDDING_MODEL_ID=${embedding_model:-amazon.titan-embed-text-v2:0}
+
+# SkillsFuture developer portal credentials. Terraform does not know these —
+# paste them once and this script preserves them across regenerations. Blank is
+# valid: the Skills Framework endpoints in use are "Open" and answer without a
+# token.
+SSG_CLIENT_ID=$ssg_client_id
+SSG_CLIENT_SECRET=$ssg_client_secret
+
+# AWS credentials intentionally omitted. The SDK reads ~/.aws/credentials via
+# its default provider chain, so the sandbox login is refreshed in exactly one
 # place. Setting AWS_ACCESS_KEY_ID here would override that and go stale.
 EOF
 
 echo "Wrote $env_file"
-echo "  AWS_REGION             = $region"
-echo "  S3_BUCKET_NAME         = ${bucket:-<empty>}"
-echo "  DYNAMODB_RESUMES_TABLE = ${resumes_table:-<empty>}"
+echo "  AWS_REGION              = $region"
+echo "  S3_BUCKET_NAME          = ${bucket:-<empty>}"
+echo "  DYNAMODB_RESUMES_TABLE  = ${resumes_table:-<empty>}"
+echo "  DYNAMODB_ANALYSES_TABLE = ${analyses_table:-<empty>}"
+echo "  BEDROCK_REGION          = ${bedrock_region:-$region}"
+echo "  BEDROCK_REASONING_MODEL = ${reasoning_model:-amazon.nova-lite-v1:0}"
+echo "  SSG_CLIENT_ID           = ${ssg_client_id:+<preserved>}${ssg_client_id:-<empty — paste it into .env.local>}"
 
 exit "$missing"

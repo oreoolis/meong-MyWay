@@ -44,7 +44,7 @@ export function UploadStage({
   function accept(candidate: File | undefined) {
     if (!candidate) return;
 
-    // Rejected here, before any request — nothing reaches S3 or DynamoDB.
+    // Rejected here, before any request, so nothing reaches S3 or DynamoDB.
     const problem = validateResumeUpload(candidate);
     if (problem) {
       setError(problem);
@@ -175,7 +175,7 @@ export function UploadStage({
 
       <p className="mt-4 flex items-center justify-center gap-2 text-[12px] text-ink-muted">
         <LockIcon className="h-3.5 w-3.5" />
-        Only you can read your stored resume — it is keyed to your account.
+        Only you can read your stored resume. It is keyed to your account.
       </p>
     </div>
   );

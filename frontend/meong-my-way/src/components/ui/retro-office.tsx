@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils";
 /**
  * The pipeline as a retro-game loading screen.
  *
- * Three pixel-art clerks pass one document down the line — filing, parsing,
- * planning — mirroring the real handoff in `lib/resume/pipeline.ts`. The scene
+ * Three pixel-art clerks pass one document down the line: filing, parsing,
+ * and planning, mirroring the real handoff in `lib/resume/pipeline.ts`. The scene
  * is driven entirely by the phase and step props, so it can never claim
  * progress the pipeline has not actually made.
  *
@@ -48,7 +48,7 @@ const CLERK = [
 
 const DESK = ["DDDDDDDD", "DDDDDDDD", ".L....L.", ".L....L."];
 
-/** A sheet of paper with ruled lines — the work being passed along. */
+/** A sheet of paper with ruled lines: the work being passed along. */
 const DOCUMENT = [
   "WWWWWWW",
   "WKKKKKW",
@@ -110,7 +110,7 @@ function PixelGrid({
  * Stations
  * ---------------------------------------------------------------------- */
 
-type StationId = "store" | "parser" | "planner";
+type StationId = "store" | "parser" | "planner" | "specialists";
 
 type Station = {
   id: StationId;
@@ -119,10 +119,14 @@ type Station = {
   shirt: string;
 };
 
+// The fourth desk stands for all three specialists (improver, advisor, and
+// swapper), which run together, so one desk represents the fan-out rather
+// than pretending they are sequential.
 const STATIONS: Station[] = [
   { id: "store", name: "FILING", deskLabel: "S3 + DYNAMO", shirt: "#f2b134" },
   { id: "parser", name: "PARSER", deskLabel: "READ + EMBED", shirt: "#4de0c8" },
   { id: "planner", name: "PLANNER", deskLabel: "MATCH PATHS", shirt: "#c58bf2" },
+  { id: "specialists", name: "ADVISORS", deskLabel: "SKILLS FRAMEWORK", shirt: "#f28b82" },
 ];
 
 /** Which desk is holding the work, and whether it is mid-flight to the next. */
@@ -130,12 +134,13 @@ const PHASE_POSITION: Record<
   PipelinePhase,
   { station: number; inTransit: boolean; progress: number }
 > = {
-  uploading: { station: 0, inTransit: false, progress: 12 },
-  stored: { station: 0, inTransit: true, progress: 30 },
-  parsing: { station: 1, inTransit: false, progress: 48 },
-  handoff: { station: 1, inTransit: true, progress: 66 },
-  planning: { station: 2, inTransit: false, progress: 84 },
-  complete: { station: 2, inTransit: false, progress: 100 },
+  uploading: { station: 0, inTransit: false, progress: 10 },
+  stored: { station: 0, inTransit: true, progress: 24 },
+  parsing: { station: 1, inTransit: false, progress: 38 },
+  handoff: { station: 1, inTransit: true, progress: 52 },
+  planning: { station: 2, inTransit: false, progress: 68 },
+  specialists: { station: 3, inTransit: false, progress: 88 },
+  complete: { station: 3, inTransit: false, progress: 100 },
 };
 
 const PHASE_CAPTION: Record<PipelinePhase, string> = {
@@ -144,7 +149,8 @@ const PHASE_CAPTION: Record<PipelinePhase, string> = {
   parsing: "Parser is reading and embedding the document...",
   handoff: "Embeddings and metadata handed to the planner...",
   planning: "Planner is matching you against career paths...",
-  complete: "All done — results are ready!",
+  specialists: "Advisors are checking the Skills Framework...",
+  complete: "All done! Results are ready.",
 };
 
 /* -------------------------------------------------------------------------
@@ -220,7 +226,7 @@ export function RetroOfficeLoader({
           </div>
         </div>
 
-        <div className="absolute inset-x-0 bottom-0 grid grid-cols-3 items-end gap-2">
+        <div className="absolute inset-x-0 bottom-0 grid grid-cols-4 items-end gap-2">
           {STATIONS.map((s, index) => (
             <Desk
               key={s.id}
@@ -242,7 +248,7 @@ export function RetroOfficeLoader({
       {runningStep ? (
         <p className="mt-1 truncate font-mono text-[11px] text-[#7c6a99]">
           &gt; {runningStep.label}
-          {runningStep.detail ? ` — ${runningStep.detail}` : ""}
+          {runningStep.detail ? `: ${runningStep.detail}` : ""}
         </p>
       ) : null}
 

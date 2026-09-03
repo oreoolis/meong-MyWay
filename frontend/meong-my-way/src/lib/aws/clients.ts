@@ -1,5 +1,6 @@
 import "server-only";
 
+import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { S3Client } from "@aws-sdk/client-s3";
@@ -32,15 +33,41 @@ function required(name: string): string {
 }
 
 export function getStorageConfig() {
-  const missing = (["S3_BUCKET_NAME", "DYNAMODB_RESUMES_TABLE"] as const).filter(
-    (name) => !process.env[name]?.trim(),
-  );
+  const missing = (
+    [
+      "S3_BUCKET_NAME",
+      "DYNAMODB_RESUMES_TABLE",
+      "DYNAMODB_ANALYSES_TABLE",
+    ] as const
+  ).filter((name) => !process.env[name]?.trim());
   if (missing.length > 0) throw new AwsConfigurationError([...missing]);
 
   return {
     bucket: required("S3_BUCKET_NAME"),
     resumesTable: required("DYNAMODB_RESUMES_TABLE"),
+    analysesTable: required("DYNAMODB_ANALYSES_TABLE"),
     region: process.env.AWS_REGION?.trim() || "us-east-1",
+  };
+}
+
+/**
+ * Which models the agents call, and where.
+ *
+ * The region is separate from the storage region because Bedrock is not
+ * offered everywhere, and model availability differs between the regions where
+ * it is — inference can sit in us-east-1 while the bucket stays put.
+ */
+export function getBedrockConfig() {
+  return {
+    region:
+      process.env.BEDROCK_REGION?.trim() ||
+      process.env.AWS_REGION?.trim() ||
+      "us-east-1",
+    reasoningModelId:
+      process.env.BEDROCK_REASONING_MODEL_ID?.trim() || "amazon.nova-lite-v1:0",
+    embeddingModelId:
+      process.env.BEDROCK_EMBEDDING_MODEL_ID?.trim() ||
+      "amazon.titan-embed-text-v2:0",
   };
 }
 
@@ -60,6 +87,7 @@ function explicitCredentials() {
 
 let s3: S3Client | undefined;
 let ddb: DynamoDBDocumentClient | undefined;
+let bedrock: BedrockRuntimeClient | undefined;
 
 export function getS3Client(): S3Client {
   const { region } = getStorageConfig();
@@ -77,4 +105,17 @@ export function getDocumentClient(): DynamoDBDocumentClient {
     },
   );
   return ddb;
+}
+
+export function getBedrockClient(): BedrockRuntimeClient {
+  const { region } = getBedrockConfig();
+  bedrock ??= new BedrockRuntimeClient({
+    region,
+    credentials: explicitCredentials(),
+    // A five-agent run is five sequential model calls; the SDK default of
+    // three attempts on a throttle is what keeps a burst from failing the
+    // whole pipeline.
+    maxAttempts: 3,
+  });
+  return bedrock;
 }
