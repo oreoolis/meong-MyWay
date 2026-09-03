@@ -16,7 +16,6 @@ import {
 import { cn } from "@/lib/utils";
 
 type NavLink = { label: string; href: string; isActive?: boolean };
-type Segment = { label: string };
 
 type ResponsiveHeroBannerProps = {
   backgroundImageUrl?: string;
@@ -31,8 +30,6 @@ type ResponsiveHeroBannerProps = {
   onPrimaryClick?: () => void;
   secondaryButtonText?: string;
   secondaryButtonHref?: string;
-  segmentsTitle?: string;
-  segments?: Segment[];
 };
 
 /**
@@ -41,28 +38,17 @@ type ResponsiveHeroBannerProps = {
  */
 export function ResponsiveHeroBanner({
   backgroundImageUrl = "/hero-architecture.jpg",
-  navLinks = [
-    { label: "Home", href: "#", isActive: true },
-    { label: "How it works", href: "#how-it-works" },
-  ],
+  navLinks = [{ label: "How it works", href: "#how-it-works" }],
   ctaButtonText = "Sign in",
   onCtaClick,
-  badgeText = "Agentic Powered Resume and Career Analysis",
+  badgeText = "AI-powered career analysis",
   title = "Advance Your Career",
   titleLine2 = "With Data-Backed Confidence",
-  description = "Get real, agentic suggestions on where to head next in your career, backed by latest up-to-date job data.",
+  description = "Turn your resume into realistic next moves, grounded in current job data.",
   primaryButtonText = "Upload your resume",
   onPrimaryClick,
   secondaryButtonText = "See how it works",
   secondaryButtonHref = "#how-it-works",
-  segmentsTitle = "Built for professionals moving forward in:",
-  segments = [
-    { label: "Technology" },
-    { label: "Finance" },
-    { label: "Healthcare" },
-    { label: "Consulting" },
-    { label: "Retail & E-commerce" },
-  ],
 }: ResponsiveHeroBannerProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -213,31 +199,25 @@ export function ResponsiveHeroBanner({
                   <FileText className="h-4 w-4" />
                 </span>
                 <div>
-                  <p className="text-sm font-medium text-white">Career route</p>
-                  <p className="mt-0.5 text-xs text-white/45">Built from your experience</p>
+                  <p className="text-sm font-medium text-white">From resume to next move</p>
                 </div>
               </div>
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200 ring-1 ring-emerald-300/15">
                 <Sparkles className="h-3 w-3" />
-                Live analysis
+                2 agents
               </span>
             </div>
 
             <div className="relative px-6 py-6">
-              <p className="mb-4 text-xs leading-5 text-white/50">
-                One resume moves through two specialist agents, then branches into
-                realistic directions.
-              </p>
-
               <div className="mw-flow-node mw-flow-node-1 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[.055] p-3.5">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 text-blue-100">
                   <FileText className="h-4 w-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-white/35">
-                    Input
+                    Start
                   </p>
-                  <p className="mt-0.5 text-sm font-medium text-white">Your resume</p>
+                  <p className="mt-0.5 text-sm font-medium text-white">Resume</p>
                 </div>
                 <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] text-white/45 ring-1 ring-white/10">
                   PDF or DOCX
@@ -253,7 +233,7 @@ export function ResponsiveHeroBanner({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-white">Parser agent</p>
                   <p className="mt-0.5 truncate text-[11px] text-white/45">
-                    Reads skills, seniority and domain
+                    Understands your experience
                   </p>
                 </div>
                 <ArrowDown className="h-4 w-4 text-blue-300/60" />
@@ -268,7 +248,7 @@ export function ResponsiveHeroBanner({
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-white">Planner agent</p>
                   <p className="mt-0.5 truncate text-[11px] text-white/45">
-                    Maps your fit against current job data
+                    Finds realistic next moves
                   </p>
                 </div>
                 <GitBranch className="h-4 w-4 text-blue-300/60" />
@@ -279,7 +259,7 @@ export function ResponsiveHeroBanner({
               <div className="mw-flow-node mw-flow-node-4">
                 <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[.16em] text-white/35">
                   <GitBranch className="h-3.5 w-3.5 text-blue-300" />
-                  Realistic career routes
+                  Career routes
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="rounded-xl border border-blue-300/15 bg-blue-400/[.08] px-3 py-2.5">
@@ -301,22 +281,6 @@ export function ResponsiveHeroBanner({
         </div>
       </div>
 
-      {segments.length > 0 ? (
-        <div className="relative z-10 border-t border-white/10 bg-slate-950/20 backdrop-blur-sm">
-          <div className="mx-auto flex max-w-7xl flex-col items-center gap-4 px-5 py-5 sm:px-8 lg:flex-row lg:justify-between">
-            <p className="text-xs font-medium uppercase tracking-[.16em] text-white/45">
-              {segmentsTitle}
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 lg:justify-end">
-              {segments.map((segment) => (
-                <span key={segment.label} className="text-[13px] font-medium text-white/70">
-                  {segment.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }
