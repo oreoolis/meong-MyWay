@@ -13,8 +13,8 @@ import {
   TrendUpIcon,
 } from "./icons";
 
-/* Category identity. The dot carries the hue, the text carries the meaning —
-   the label is never dropped, so the color is never the only channel. */
+/* Category identity. The dot carries the hue, the text carries the meaning.
+   The label is never dropped, so the color is never the only channel. */
 const KIND_META: Record<PathKind, { label: string; dot: string }> = {
   progression: { label: "Natural progression", dot: "bg-[var(--cat-progression)]" },
   adjacent: { label: "Adjacent move", dot: "bg-[var(--cat-adjacent)]" },
@@ -162,7 +162,7 @@ export function PathCard({ path, rank }: { path: CareerPath; rank: number }) {
                       {milestone.actions.map((action) => (
                         <li
                           key={action}
-                          className="text-[13px] leading-relaxed text-ink-2 before:mr-2 before:text-ink-muted before:content-['—']"
+                          className="text-[13px] leading-relaxed text-ink-2 before:mr-2 before:text-ink-muted before:content-['·']"
                         >
                           {action}
                         </li>

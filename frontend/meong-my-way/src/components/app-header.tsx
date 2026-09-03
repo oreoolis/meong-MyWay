@@ -5,7 +5,9 @@ import { Stepper, type StepperItem } from "@/components/ui/stepper";
 import { SparkIcon } from "@/components/ui/icons";
 
 export const STEPS: StepperItem[] = [
-  { key: "signin", label: "Sign in" }
+  { key: "upload", label: "Upload" },
+  { key: "analysis", label: "Analysis" },
+  { key: "results", label: "Results" },
 ];
 
 export function AppHeader({
@@ -18,7 +20,7 @@ export function AppHeader({
   onSignOut: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-10 border-b border-hairline bg-plane/85 backdrop-blur-md">
+    <header className="sticky top-0 z-10 border-b border-hairline bg-plane shadow-[var(--shadow-card)]">
       <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-6 px-5 sm:px-8">
         <div className="flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-ink">

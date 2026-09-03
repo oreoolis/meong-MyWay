@@ -123,10 +123,10 @@ function StepRow({ step }: { step: AgentStep }) {
           {step.label}
           <span className="sr-only">
             {step.status === "done"
-              ? " — complete"
+              ? ", complete"
               : step.status === "running"
-                ? " — in progress"
-                : " — pending"}
+                ? ", in progress"
+                : ", pending"}
           </span>
         </p>
 

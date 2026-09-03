@@ -5,8 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentId,
   AgentStep,
-  CareerPlan,
-  ResumeProfile,
+  AnalysisBundle,
   Session,
 } from "@/lib/contracts";
 import type { AgentCardState } from "@/components/ui/agent-trace";
@@ -25,7 +24,12 @@ import { LandingStage } from "./stages/landing-stage";
 import { SignInStage } from "./stages/sign-in-stage";
 import { UploadStage } from "./stages/upload-stage";
 import { AnalysisStage } from "./stages/analysis-stage";
-import { ResultsStage } from "./stages/results-stage";
+import {
+  ResultsChoiceStage,
+  type ResultsBranch,
+} from "./stages/results-choice-stage";
+import { AdvisorStage } from "./stages/advisor-stage";
+import { TransitionerStage } from "./stages/transitioner-stage";
 
 type Stage = "landing" | "signin" | "upload" | "analysis" | "results";
 
@@ -34,6 +38,11 @@ function cardState(steps: AgentStep[]): AgentCardState {
   if (steps.length === 0) return "idle";
   if (steps.every((s) => s.status === "done")) return "done";
   return "running";
+}
+
+/** Specialist steps are namespaced `agent:step`; the planner's own are not. */
+function isSpecialistStep(step: AgentStep): boolean {
+  return step.key.includes(":");
 }
 
 export function Workspace() {
@@ -46,8 +55,9 @@ export function Workspace() {
   const [plannerSteps, setPlannerSteps] = useState<AgentStep[]>([]);
   const [phase, setPhase] = useState<PipelinePhase>("uploading");
   const [storedResume, setStoredResume] = useState<StoredResume | null>(null);
-  const [profile, setProfile] = useState<ResumeProfile | null>(null);
-  const [plan, setPlan] = useState<CareerPlan | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisBundle | null>(null);
+  /** Which results view is open. `null` is the fork itself. */
+  const [branch, setBranch] = useState<ResultsBranch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -82,9 +92,35 @@ export function Workspace() {
     };
   }, [loadStoredResume]);
 
+  /**
+   * The analysis stage shows two trace cards, so the three specialist agents
+   * are folded into the planner's card: they are the planner's fan-out, and
+   * five columns would not fit the layout.
+   */
   const report = useCallback((agent: AgentId, steps: AgentStep[]) => {
-    if (agent === "parser") setParserSteps(steps);
-    else setPlannerSteps(steps);
+    if (agent === "parser") {
+      setParserSteps(steps);
+      return;
+    }
+
+    if (agent === "planner") {
+      // Keep any specialist steps already appended below.
+      setPlannerSteps((prev) => [...steps, ...prev.filter(isSpecialistStep)]);
+      return;
+    }
+
+    // Namespace the key so all three specialists can share the planner's card
+    // without colliding, since each of them has a step called "search".
+    const namespaced = steps.map((step) => ({
+      ...step,
+      key: `${agent}:${step.key}`,
+    }));
+
+    setPlannerSteps((prev) => {
+      const byKey = new Map(prev.map((step) => [step.key, step]));
+      for (const step of namespaced) byKey.set(step.key, step);
+      return [...byKey.values()];
+    });
   }, []);
 
   const runPipeline = useCallback(
@@ -96,8 +132,8 @@ export function Workspace() {
       setStorageSteps([]);
       setParserSteps([]);
       setPlannerSteps([]);
-      setProfile(null);
-      setPlan(null);
+      setAnalysis(null);
+      setBranch(null);
       setError(null);
       setUploadError(null);
       setPhase("uploading");
@@ -112,8 +148,7 @@ export function Workspace() {
             onStorageSteps: setStorageSteps,
             onPhase: setPhase,
             onStored: setStoredResume,
-            onProfile: setProfile,
-            onPlan: setPlan,
+            onAnalysis: setAnalysis,
           },
           controller.signal,
         );
@@ -160,8 +195,8 @@ export function Workspace() {
       setParserSteps([]);
       setPlannerSteps([]);
       setStoredResume(null);
-      setProfile(null);
-      setPlan(null);
+      setAnalysis(null);
+      setBranch(null);
       setError(null);
       setUploadError(null);
       setStage("landing");
@@ -180,8 +215,8 @@ export function Workspace() {
     setStorageSteps([]);
     setParserSteps([]);
     setPlannerSteps([]);
-    setProfile(null);
-    setPlan(null);
+    setAnalysis(null);
+    setBranch(null);
     setError(null);
     setUploadError(null);
     setStage("upload");
@@ -235,7 +270,7 @@ export function Workspace() {
             plannerSteps={plannerSteps}
             parserState={cardState(parserSteps)}
             plannerState={cardState(plannerSteps)}
-            profile={profile}
+            profile={analysis?.profile ?? null}
             error={error}
             onRetry={() => file && void runPipeline(file)}
             phase={phase}
@@ -244,19 +279,35 @@ export function Workspace() {
           />
         ) : null}
 
-        {stage === "results" && profile && plan ? (
-          <ResultsStage
-            profile={profile}
-            plan={plan}
+        {/* The fork from the wireframe, then whichever branch was chosen. */}
+        {stage === "results" && analysis && branch === null ? (
+          <ResultsChoiceStage
+            analysis={analysis}
+            onChoose={setBranch}
             onStartOver={handleStartOver}
+          />
+        ) : null}
+
+        {stage === "results" && analysis && branch === "advisor" ? (
+          <AdvisorStage
+            analysis={analysis}
+            onBack={() => setBranch(null)}
+            onSwitchBranch={() => setBranch("transitioner")}
+          />
+        ) : null}
+
+        {stage === "results" && analysis && branch === "transitioner" ? (
+          <TransitionerStage
+            analysis={analysis}
+            onBack={() => setBranch(null)}
+            onSwitchBranch={() => setBranch("advisor")}
           />
         ) : null}
       </main>
 
       <footer className="border-t border-hairline px-5 py-6 sm:px-8">
         <p className="mx-auto w-full max-w-5xl text-[12px] text-ink-muted">
-          MyWay — agentic career switching. Resumes are stored in S3 and
-          DynamoDB; the two agents are still mocked.
+          © MyWay 2026. Powered by Next.JS and Amazon Web Services.
         </p>
       </footer>
     </div>
