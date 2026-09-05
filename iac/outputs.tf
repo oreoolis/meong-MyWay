@@ -19,8 +19,13 @@ output "dynamodb_analyses_table_name" {
 # Set as BEDROCK_REASONING_MODEL_ID / BEDROCK_EMBEDDING_MODEL_ID /
 # BEDROCK_REGION. Echoed from the data sources rather than the variables so the
 # output is proof the models actually resolved.
+#
+# This is the *runtime* ID — the inference profile, not the foundation model.
+# Handing out the foundation-model ID would produce a ValidationException on
+# the first user request for any model that is profile-only, which is every
+# Anthropic 4.x model.
 output "bedrock_reasoning_model_id" {
-  value = data.aws_bedrock_foundation_model.reasoning.model_id
+  value = var.bedrock_inference_profile_prefix == "" ? data.aws_bedrock_foundation_model.reasoning.model_id : data.aws_bedrock_inference_profile.reasoning[0].inference_profile_id
 }
 
 output "bedrock_embedding_model_id" {

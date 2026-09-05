@@ -1,0 +1,49 @@
+# gitleaks configuration for meong-MyWay.
+#
+# Runs in CI via .github/workflows/secret-scan.yml over the full git history.
+# Keep this file narrow: every allowlist entry is a hole, and the point of the
+# scan is the secrets nobody thought to look for.
+
+title = "meong-MyWay secret scanning"
+
+[extend]
+# Start from gitleaks' bundled rule set (AWS keys, private keys, JWTs, provider
+# tokens, high-entropy generic keys) rather than hand-maintaining rules here.
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlists
+# ---------------------------------------------------------------------------
+
+[[allowlists]]
+description = """
+S3 object keys are not API keys.
+
+The AWS SDK names its object-path parameter `Key`, so `Key: previous.s3Key` in
+lib/resume/store.ts trips the generic-api-key rule on the word alone.
+
+This is scoped three ways — to that one rule, to JS/TS source, and to a `Key:`
+whose value is an *identifier expression*. A hardcoded `Key: "sk_live_..."`
+string literal is still reported, which is the case actually worth catching.
+Verified both ways before this was committed.
+"""
+# All three criteria must hold. gitleaks ORs them by default, which would make
+# the path pattern alone allowlist every TypeScript file in the repo.
+condition   = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = ['''\bKey:\s*[A-Za-z_$][A-Za-z0-9_$.\[\]]*\s*[,}]?\s*$''']
+paths = ['''\.(ts|tsx|js|jsx|mjs|cjs)$''']
+
+[[allowlists]]
+description = """
+Terraform's own lock file is hashes, not secrets.
+
+.terraform.lock.hcl is committed deliberately (it pins provider versions) and is
+entirely base64 checksums, which is what an entropy rule looks for.
+"""
+paths = ['''\.terraform\.lock\.hcl$''']
+
+# NOTE: .env.example is deliberately NOT allowlisted. It is the single file most
+# likely to receive a real credential pasted in by accident, so it should be
+# scanned harder than the rest of the tree, not less.

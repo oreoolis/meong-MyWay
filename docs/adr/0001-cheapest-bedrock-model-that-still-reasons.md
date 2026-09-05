@@ -1,7 +1,13 @@
 # ADR-0001: Amazon Nova Lite as the reasoning model, Titan V2 for embeddings
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0002](0002-claude-haiku-for-grounded-advice.md)
 **Date:** 2026-09-02
+
+> Superseded on 2026-09-04. The "Revisiting" condition below — users reporting
+> the advice as generic — was met: the Career Swapper's destinations were not
+> grounded in the resume. The reasoning model is now Claude Haiku 4.5. The
+> embedding decision (Titan V2) and the consequences about normalisation,
+> Skills Framework ground truth, and temperature 0 all still hold.
 
 ## Context
 

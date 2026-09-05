@@ -77,7 +77,7 @@ DYNAMODB_ANALYSES_TABLE=$analyses_table
 
 # Amazon Bedrock — where the five agents run.
 BEDROCK_REGION=${bedrock_region:-$region}
-BEDROCK_REASONING_MODEL_ID=${reasoning_model:-amazon.nova-lite-v1:0}
+BEDROCK_REASONING_MODEL_ID=${reasoning_model:-us.anthropic.claude-haiku-4-5-20251001-v1:0}
 BEDROCK_EMBEDDING_MODEL_ID=${embedding_model:-amazon.titan-embed-text-v2:0}
 
 # SkillsFuture developer portal credentials. Terraform does not know these —
@@ -98,7 +98,7 @@ echo "  S3_BUCKET_NAME          = ${bucket:-<empty>}"
 echo "  DYNAMODB_RESUMES_TABLE  = ${resumes_table:-<empty>}"
 echo "  DYNAMODB_ANALYSES_TABLE = ${analyses_table:-<empty>}"
 echo "  BEDROCK_REGION          = ${bedrock_region:-$region}"
-echo "  BEDROCK_REASONING_MODEL = ${reasoning_model:-amazon.nova-lite-v1:0}"
+echo "  BEDROCK_REASONING_MODEL = ${reasoning_model:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
 echo "  SSG_CLIENT_ID           = ${ssg_client_id:+<preserved>}${ssg_client_id:-<empty — paste it into .env.local>}"
 
 exit "$missing"

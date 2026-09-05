@@ -1,5 +1,9 @@
-.env
-.env.local
+# Env files. The glob matters: listing only `.env` and `.env.local` left
+# `.env.production` (and any other suffix) committable at the repo root, while
+# frontend/meong-my-way/.gitignore already used `.env*`. CI asserts this
+# coverage — see .github/workflows/secret-scan.yml.
+.env*
+!.env.example
 .claude
 .agents
 
@@ -9,5 +13,10 @@
 iac/.terraform/
 iac/terraform.tfstate
 iac/terraform.tfstate.backup
+iac/*.tfvars
+iac/*.tfvars.json
 iac/*.tfplan
 iac/crash.log
+
+# Remove all docs and reasoning
+docs/*
