@@ -27,20 +27,43 @@
 ### AI / Agents
 <p>
   <img src="https://img.shields.io/badge/Amazon_Bedrock-Converse_API-8C4FFF?style=flat-square&logo=amazonaws&logoColor=white" />
-  <img src="https://img.shields.io/badge/Nova_Lite-reasoning-232F3E?style=flat-square&logo=amazonaws&logoColor=white" />
+  <img src="https://img.shields.io/badge/Claude_Haiku_4.5-reasoning-D97757?style=flat-square&logo=anthropic&logoColor=white" />
   <img src="https://img.shields.io/badge/Titan_Embeddings_V2-1024d_vectors-232F3E?style=flat-square&logo=amazonaws&logoColor=white" />
 </p>
 
-### Infrastructure & Auth
+### AWS Services
+
+<table>
+  <tr>
+    <td align="center" width="132">
+      <img src="docs/img/aws/bedrock.svg" width="46" height="46" alt="Amazon Bedrock" /><br />
+      <sub><b>Amazon Bedrock</b><br />Converse API</sub>
+    </td>
+    <td align="center" width="132">
+      <img src="docs/img/aws/s3.svg" width="46" height="46" alt="Amazon S3" /><br />
+      <sub><b>Amazon S3</b><br />resume bytes</sub>
+    </td>
+    <td align="center" width="132">
+      <img src="docs/img/aws/dynamodb.svg" width="46" height="46" alt="Amazon DynamoDB" /><br />
+      <sub><b>Amazon DynamoDB</b><br />resumes + analyses</sub>
+    </td>
+    <td align="center" width="132">
+      <img src="docs/img/aws/cognito.svg" width="46" height="46" alt="Amazon Cognito" /><br />
+      <sub><b>Amazon Cognito</b><br />SRP + TOTP MFA</sub>
+    </td>
+    <td align="center" width="132">
+      <img src="docs/img/aws/iam.svg" width="46" height="46" alt="AWS IAM" /><br />
+      <sub><b>AWS IAM</b><br />agent-runtime policy</sub>
+    </td>
+  </tr>
+</table>
+
+### Infrastructure & CI
+
 <p>
-  <a href="https://skillicons.dev"><img src="https://skillicons.dev/icons?i=aws,terraform" /></a>
-</p>
-<p>
-  <img src="https://img.shields.io/badge/Amazon_Cognito-Auth_(Amplify)-DD344C?style=flat-square&logo=amazoncognito&logoColor=white" />
-  <img src="https://img.shields.io/badge/DynamoDB-Pay_per_request-4053D6?style=flat-square&logo=amazondynamodb&logoColor=white" />
-  <img src="https://img.shields.io/badge/S3-Resume_storage-569A31?style=flat-square&logo=amazons3&logoColor=white" />
   <img src="https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white" />
   <img src="https://img.shields.io/badge/GitHub_Actions-Deploy_on_push-2088FF?style=flat-square&logo=githubactions&logoColor=white" />
+  <img src="https://img.shields.io/badge/gitleaks-secret_scanning-EF4444?style=flat-square&logo=git&logoColor=white" />
 </p>
 
 ### External Data
@@ -53,6 +76,19 @@
 ## Architecture Overview
 
 Everything is one Next.js app: pages and API routes ship from the same codebase, deployed as a single unit. There is no separate backend service — `src/app/api/*` route handlers are the server, calling AWS directly with the runtime's own credentials.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg" />
+    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture — browser, Next.js compute, and the Bedrock, S3, DynamoDB, Cognito and IAM services behind it" width="100%" />
+  </picture>
+</p>
+
+<sub>Icons: <a href="https://aws.amazon.com/architecture/icons/">AWS Architecture Icons</a>. Diagram regenerated with <code>node scripts/gen-architecture.js docs/img</code>.</sub>
+
+### The same thing as a flow graph
+
+Where the diagram above shows *what* is deployed, this shows *what calls what* — including the ordering rule the orchestrator enforces.
 
 ```mermaid
 graph TD
@@ -90,7 +126,7 @@ graph TD
     planner --> improver & advisor & swapper
 
     subgraph aws["🏗️ AWS Infrastructure (ap/us-east-1)"]
-        bedrock[("Amazon Bedrock<br/>Nova Lite + Titan Embed V2")]
+        bedrock[("Amazon Bedrock<br/>Claude Haiku 4.5 + Titan Embed V2")]
         s3[("S3 Bucket<br/>resume bytes")]
         ddbResumes[("DynamoDB<br/>{project}-resumes")]
         ddbAnalyses[("DynamoDB<br/>{project}-analyses")]
@@ -232,7 +268,7 @@ sequenceDiagram
 | 4 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
 | 5 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations + skills that transfer |
 
-Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3–5 then fan out with `Promise.allSettled`, so one specialist failing (e.g. no SSG credentials) still returns a usable bundle — see [ADR-0001](docs/adr/0001-cheapest-bedrock-model-that-still-reasons.md) for why Nova Lite + Titan V2 were chosen on cost grounds.
+Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3–5 then fan out with `Promise.allSettled`, so one specialist failing (e.g. no SSG credentials) still returns a usable bundle — see [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md) for why Claude Haiku 4.5 replaced Nova Lite as the reasoning model, and what it costs.
 
 ---
 
@@ -276,7 +312,9 @@ terraform apply
 
 This creates the S3 uploads bucket, the `{project}-resumes` and `{project}-analyses` DynamoDB tables, and resolves the two Bedrock model IDs. `terraform output` gives you every value the frontend `.env.local` needs. `create_iam` is off by default (the dev sandbox restricts IAM writes) — flip it on when deploying somewhere with a real execution role. CI applies this automatically via `.github/workflows/deplopy-infra.yml` on pushes to `iac/**`.
 
-Enable model access once per account, in the Bedrock console → **Model access**, for `amazon.nova-lite-v1:0` and `amazon.titan-embed-text-v2:0`.
+Enable model access once per account, in the Bedrock console → **Model access**, for `anthropic.claude-haiku-4-5-20251001-v1:0` and `amazon.titan-embed-text-v2:0`.
+
+Haiku 4.5 is invoked through a cross-region inference profile, so the ID the app uses carries a `us.` prefix that the console does not show. Take it from `terraform output bedrock_reasoning_model_id` rather than typing it.
 
 ### 2 — Create a Cognito user pool
 
@@ -309,7 +347,7 @@ AWS_SESSION_TOKEN=
 
 # --- Amazon Bedrock ----------------------------------------------------------
 BEDROCK_REGION=us-east-1
-BEDROCK_REASONING_MODEL_ID=amazon.nova-lite-v1:0
+BEDROCK_REASONING_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
 # --- SkillsFuture (SSG-WSG) Skills Framework API ------------------------------
@@ -399,6 +437,55 @@ Tailwind v4, configured entirely in `src/app/globals.css` — there is no `tailw
 
 ---
 
+## Security — keeping credentials out of the repo and the bundle
+
+Two different leaks are possible here, so CI checks for both.
+[`.github/workflows/secret-scan.yml`](.github/workflows/secret-scan.yml) runs on
+every push and pull request, needs no repository secrets of its own (so it works
+on forks), and also runs weekly — history does not change, but gitleaks' rules
+do, so a credential format that had no rule when it was committed gets caught later.
+
+| Job | Asks | How |
+|-----|------|-----|
+| **Committed secrets** | Has a credential ever been committed? | [gitleaks](https://github.com/gitleaks/gitleaks) over the **full history** (`fetch-depth: 0`), redacted so the Actions log never reprints the key it just found |
+| **Env-file hygiene** | Could a credential be committed *next* time? | No tracked `.env*` (except the template) or `.tfstate`/`.tfvars`; `.gitignore` is asserted to cover every env variant; no `NEXT_PUBLIC_` name shaped like a secret; no client component reading a server-only `process.env` |
+| **Client bundle leak** | Did a credential reach the browser? | Builds the app with canary values in the server-only variables, then greps `.next/static` for them |
+
+### The rule that matters most
+
+**Anything prefixed `NEXT_PUBLIC_` is inlined into the browser bundle by Next.js.**
+An AWS secret key with that prefix is published to every visitor. Server-side
+values are read only in modules that `import "server-only"` (see
+`lib/aws/clients.ts`), and CI fails the build if a `NEXT_PUBLIC_` variable is
+named like a credential.
+
+The bundle-canary job is deliberately narrow in scope, and it is worth knowing why.
+Next.js does **not** inline a non-`NEXT_PUBLIC_` variable into the client bundle even
+when a client component reads it directly — that was measured against this app, which
+is why the naming check above is the primary control. What the canary job catches is
+the config-level leak no naming rule can see: an `env` block in `next.config.ts`, a
+DefinePlugin, or any future bundler change that starts inlining server values.
+
+### False positives
+
+`.gitleaks.toml` allowlists exactly two things, each scoped to a rule *and* a path
+rather than a bare path — the AWS SDK's `Key:` object-path parameter in TS/JS
+(a hardcoded `Key: "sk_live_..."` literal still fails), and `.terraform.lock.hcl`,
+which is committed on purpose and is entirely checksums.
+
+`.env.example` is deliberately **not** allowlisted: it is the file most likely to
+receive a real credential pasted in by accident, so it is scanned harder than the
+rest of the tree, not less.
+
+### If the scan fails on a real credential
+
+**Rotate it first.** It is on GitHub's servers and in every clone; rewriting history
+does not un-publish it, and rotation is the only step that actually revokes access.
+Then remove it from the tree, confirm `.gitignore` covers the path, and only then
+consider `git filter-repo`.
+
+---
+
 ## Troubleshooting
 
 **Frontend shows "Sign in is not configured"**
@@ -415,6 +502,12 @@ A Bedrock call failed (throttling or a malformed model reply) — this is `Agent
 
 **`terraform apply` fails on IAM resources**
 `create_iam` defaults to `false` because the dev sandbox account restricts IAM writes. Leave it off for local development; the app runs on your own AWS CLI credentials instead of a task role.
+
+**Bedrock returns `ValidationException: Invocation of model ID ... with on-demand throughput isn't supported`**
+`BEDROCK_REASONING_MODEL_ID` is set to the bare foundation-model ID. Claude 4.x on Bedrock is inference-profile-only — the ID needs its geography prefix (`us.anthropic.claude-haiku-4-5-20251001-v1:0`). Take it from `terraform output bedrock_reasoning_model_id`; the Bedrock console shows the unprefixed ID, which is the one that fails.
+
+**Bedrock returns `AccessDeniedException` intermittently**
+A cross-region inference profile is authorised against the profile *and* against the foundation model in whichever region it routed to, so a policy granting only one of them fails on some requests and not others. `iac/bedrock.tf` expands both, reading the region list from the profile itself.
 
 **Analysis takes a long time / times out on serverless**
 Five sequential-then-parallel model calls plus SSG lookups can run long; `maxDuration = 300` is set on the route, but some platforms (e.g. Vercel Hobby) cap function duration lower regardless — the client already treats a timeout as retryable.

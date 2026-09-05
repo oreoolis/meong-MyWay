@@ -2,7 +2,7 @@
 # lands in.
 #
 # Cost is the binding constraint here — see
-# docs/adr/0001-cheapest-bedrock-model-that-still-reasons.md. Nothing in this
+# docs/adr/0002-claude-haiku-for-grounded-advice.md. Nothing in this
 # file provisions capacity: Bedrock on-demand is billed per token, so an idle
 # deployment costs $0. The only standing cost is the DynamoDB table below,
 # which is PAY_PER_REQUEST like the others.
@@ -22,6 +22,36 @@ data "aws_bedrock_foundation_model" "reasoning" {
 
 data "aws_bedrock_foundation_model" "embedding" {
   model_id = var.bedrock_embedding_model_id
+}
+
+# Anthropic's 4.x models publish INFERENCE_PROFILE as their only supported
+# inference type, so the ID the runtime invokes is not the foundation-model ID
+# above — it is that ID behind a geography prefix. Resolving the profile here
+# turns an unavailable geography into a plan-time error, and gives IAM the
+# authoritative list of regions the profile routes to rather than a hand-kept
+# copy that goes stale when AWS adds one.
+data "aws_bedrock_inference_profile" "reasoning" {
+  count = var.bedrock_inference_profile_prefix == "" ? 0 : 1
+
+  inference_profile_id = local.reasoning_runtime_model_id
+}
+
+locals {
+  # What BEDROCK_REASONING_MODEL_ID must be set to. Exported by outputs.tf and
+  # written into .env.local by sync-env.sh.
+  reasoning_runtime_model_id = "${var.bedrock_inference_profile_prefix}${var.bedrock_reasoning_model_id}"
+
+  # Invoking through a cross-region profile is authorised against the profile
+  # *and* against the foundation model in every region it may route to — the
+  # request is authorised again after it lands. Granting only the profile ARN
+  # yields an AccessDeniedException on whichever region the router happened to
+  # pick, which presents as an intermittent failure.
+  reasoning_invoke_arns = var.bedrock_inference_profile_prefix == "" ? [
+    data.aws_bedrock_foundation_model.reasoning.model_arn
+    ] : concat(
+    data.aws_bedrock_inference_profile.reasoning[0].models[*].model_arn,
+    [data.aws_bedrock_inference_profile.reasoning[0].inference_profile_arn],
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -80,15 +110,13 @@ data "aws_iam_policy_document" "agent_runtime" {
   count = var.create_iam ? 1 : 0
 
   # Scoped to the two models the agents actually call, so a compromised task
-  # role cannot invoke an expensive model. Both ARNs are account-agnostic
-  # foundation-model ARNs, which is what on-demand invocation resolves to.
+  # role cannot invoke an expensive one. The embedding ARN is an
+  # account-agnostic foundation-model ARN; the reasoning side expands to the
+  # inference profile plus each regional foundation model behind it.
   statement {
-    sid     = "InvokeAgentModels"
-    actions = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-    resources = [
-      data.aws_bedrock_foundation_model.reasoning.model_arn,
-      data.aws_bedrock_foundation_model.embedding.model_arn,
-    ]
+    sid       = "InvokeAgentModels"
+    actions   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+    resources = concat(local.reasoning_invoke_arns, [data.aws_bedrock_foundation_model.embedding.model_arn])
   }
 
   statement {

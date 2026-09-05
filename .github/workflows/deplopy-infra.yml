@@ -16,8 +16,6 @@ jobs:
   terraform:
     name: 'Terraform'
     runs-on: ubuntu-latest
-    env:
-      VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN}}
     steps:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout
