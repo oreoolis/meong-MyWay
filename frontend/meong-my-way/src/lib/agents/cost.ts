@@ -35,8 +35,15 @@ const RATES: Record<string, Rate> = {
 /** Titan Text Embeddings V2, USD per million input tokens. */
 const EMBEDDING_RATE = 0.02;
 
-/** Nova Lite, matching the Terraform default. */
-const FALLBACK_RATE: Rate = { input: 0.06, output: 0.24 };
+/**
+ * Claude Haiku 4.5, matching the Terraform default.
+ *
+ * Deliberately the *expensive* default rather than the cheap one. An
+ * unrecognised model ID means the table is out of date, and a run that silently
+ * reports a twentieth of its true cost is the failure mode that spends the
+ * budget — over-reporting is merely alarming.
+ */
+const FALLBACK_RATE: Rate = { input: 1.0, output: 5.0 };
 
 function rateFor(modelId: string): Rate {
   // Strip any cross-region prefix ("us.", "eu.", "apac.") before matching.

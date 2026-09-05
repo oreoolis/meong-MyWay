@@ -63,8 +63,12 @@ export function getBedrockConfig() {
       process.env.BEDROCK_REGION?.trim() ||
       process.env.AWS_REGION?.trim() ||
       "us-east-1",
+    // The default is an inference profile ID ("us." prefix), not a bare
+    // foundation-model ID: Claude 4.x on Bedrock is profile-only and rejects
+    // the bare ID with a ValidationException.
     reasoningModelId:
-      process.env.BEDROCK_REASONING_MODEL_ID?.trim() || "amazon.nova-lite-v1:0",
+      process.env.BEDROCK_REASONING_MODEL_ID?.trim() ||
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     embeddingModelId:
       process.env.BEDROCK_EMBEDDING_MODEL_ID?.trim() ||
       "amazon.titan-embed-text-v2:0",
