@@ -19,4 +19,8 @@ iac/*.tfplan
 iac/crash.log
 
 # Remove all docs and reasoning
-docs/*
+docs/adr
+docs/agents
+docs/auth
+CLAUDE.md
+skills-lock.json

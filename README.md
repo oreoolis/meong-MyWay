@@ -242,19 +242,21 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor Creator as Orchestrator
-    participant Agent as Agent module (lib/agents/*.ts)
-    participant Reason as lib/bedrock/reason.ts
-    participant Bedrock as Amazon Bedrock (Converse API)
+    participant Agent as "Agent module (lib/agents/*.ts)"
+    participant Reason as "lib/bedrock/reason.ts"
+    participant Bedrock as "Amazon Bedrock (Converse API)"
 
+    
     Creator->>Agent: parseResume(resume, bytes) / planCareers(profile) / ...
     Agent->>Reason: reasonJson(prompt, schema hint)
     Reason->>Bedrock: Converse (document block or text, temperature 0)
     Bedrock-->>Reason: Model reply (may be loosely-formatted JSON)
-    Reason->>Reason: Brace-scan for the JSON object; never trust a clean reply
+    Reason->>Reason: Brace-scan for the JSON object, never trust a clean reply
     Reason-->>Agent: Parsed JSON + token usage
-    Agent->>Agent: Normalise — clamp confidences, default enums,<br/>drop rewrites that don't quote the resume
+    Agent->>Agent: Normalise, clamp confidences, default enums, drop rewrites that don't quote the resume
     Agent-->>Creator: Typed result (ResumeProfile / CareerPlan / ...) + usage
 ```
+
 
 ---
 
