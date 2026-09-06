@@ -7,6 +7,7 @@ import type {
   AgentStep,
   AnalysisBundle,
   Session,
+  SwapRequestState,
 } from "@/lib/contracts";
 import type { AgentCardState } from "@/components/ui/agent-trace";
 import { sleep } from "@/lib/utils";
@@ -15,6 +16,7 @@ import {
   signOutCurrentUser,
   type AuthenticatedUser,
 } from "@/lib/auth/client";
+import { requestCareerSwap } from "@/lib/analysis/client";
 import { fetchStoredResume } from "@/lib/resume/client";
 import { runResumePipeline, type PipelinePhase } from "@/lib/resume/pipeline";
 import type { StoredResume } from "@/lib/resume/types";
@@ -40,10 +42,14 @@ function cardState(steps: AgentStep[]): AgentCardState {
   return "running";
 }
 
-/** Specialist steps are namespaced `agent:step`; the planner's own are not. */
-function isSpecialistStep(step: AgentStep): boolean {
-  return step.key.includes(":");
-}
+/** Every agent starts with an empty trace, which `cardState` reads as idle. */
+const NO_STEPS: Record<AgentId, AgentStep[]> = {
+  parser: [],
+  planner: [],
+  improver: [],
+  advisor: [],
+  swapper: [],
+};
 
 export function Workspace() {
   const [stage, setStage] = useState<Stage>("landing");
@@ -51,8 +57,8 @@ export function Workspace() {
   const [file, setFile] = useState<File | null>(null);
 
   const [storageSteps, setStorageSteps] = useState<AgentStep[]>([]);
-  const [parserSteps, setParserSteps] = useState<AgentStep[]>([]);
-  const [plannerSteps, setPlannerSteps] = useState<AgentStep[]>([]);
+  const [agentSteps, setAgentSteps] =
+    useState<Record<AgentId, AgentStep[]>>(NO_STEPS);
   const [phase, setPhase] = useState<PipelinePhase>("uploading");
   const [storedResume, setStoredResume] = useState<StoredResume | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisBundle | null>(null);
@@ -62,7 +68,17 @@ export function Workspace() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  /**
+   * The career swapper's own request, tracked apart from `analysis.swap`.
+   *
+   * `swap` is `null` both before the agent has been asked and after it has
+   * failed, so the field alone cannot say which — and those two render very
+   * differently: one is "still working", the other is "this did not work".
+   */
+  const [swapState, setSwapState] = useState<SwapRequestState>("idle");
+
   const abortRef = useRef<AbortController | null>(null);
+  const swapAbortRef = useRef<AbortController | null>(null);
 
   /** Load whatever this user already has on file, so they can replace it. */
   const loadStoredResume = useCallback(async (signal?: AbortSignal) => {
@@ -89,38 +105,73 @@ export function Workspace() {
       cancelled = true;
       controller.abort();
       abortRef.current?.abort();
+      swapAbortRef.current?.abort();
     };
   }, [loadStoredResume]);
 
   /**
-   * The analysis stage shows two trace cards, so the three specialist agents
-   * are folded into the planner's card: they are the planner's fan-out, and
-   * five columns would not fit the layout.
+   * Each agent owns its own trace.
+   *
+   * The three specialists used to be folded into the planner's card, which
+   * meant the screen showed two workers for a five-agent pipeline and the
+   * specialists' steps had to be key-namespaced to avoid colliding. The
+   * analysis stage now draws the real fan-out, so each agent reports into its
+   * own slot and the keys stay as the pipeline wrote them.
    */
   const report = useCallback((agent: AgentId, steps: AgentStep[]) => {
-    if (agent === "parser") {
-      setParserSteps(steps);
-      return;
+    setAgentSteps((prev) => ({ ...prev, [agent]: steps }));
+  }, []);
+
+  /**
+   * Start the career swapper.
+   *
+   * Called when the results fork first renders rather than when the
+   * Transitioner branch is clicked. The agent takes ~30s, and starting it at
+   * the click would put that whole wait in front of someone who has already
+   * decided what they want to see. Started here, it runs while they read the
+   * fork, and is almost always finished before the click arrives.
+   *
+   * The cost is merged rather than replaced: the figure on the results screen
+   * is meant to be what this analysis actually cost, and the swapper is part
+   * of that as soon as it has run.
+   */
+  const startCareerSwap = useCallback(async () => {
+    swapAbortRef.current?.abort();
+    const controller = new AbortController();
+    swapAbortRef.current = controller;
+
+    setSwapState("loading");
+
+    try {
+      const { swap, cost } = await requestCareerSwap(controller.signal);
+
+      setAnalysis((prev) =>
+        prev
+          ? {
+              ...prev,
+              swap,
+              cost: cost
+                ? {
+                    inputTokens: prev.cost.inputTokens + cost.inputTokens,
+                    outputTokens: prev.cost.outputTokens + cost.outputTokens,
+                    embeddingTokens: prev.cost.embeddingTokens,
+                    estimatedUsd: Number(
+                      (prev.cost.estimatedUsd + cost.estimatedUsd).toFixed(6),
+                    ),
+                  }
+                : prev.cost,
+            }
+          : prev,
+      );
+
+      // No destinations is a real answer, not a failure — the branch is simply
+      // empty, and the stage says so in its own words.
+      setSwapState("done");
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("[workspace] career swap failed:", err);
+      setSwapState("failed");
     }
-
-    if (agent === "planner") {
-      // Keep any specialist steps already appended below.
-      setPlannerSteps((prev) => [...steps, ...prev.filter(isSpecialistStep)]);
-      return;
-    }
-
-    // Namespace the key so all three specialists can share the planner's card
-    // without colliding, since each of them has a step called "search".
-    const namespaced = steps.map((step) => ({
-      ...step,
-      key: `${agent}:${step.key}`,
-    }));
-
-    setPlannerSteps((prev) => {
-      const byKey = new Map(prev.map((step) => [step.key, step]));
-      for (const step of namespaced) byKey.set(step.key, step);
-      return [...byKey.values()];
-    });
   }, []);
 
   const runPipeline = useCallback(
@@ -130,10 +181,10 @@ export function Workspace() {
       abortRef.current = controller;
 
       setStorageSteps([]);
-      setParserSteps([]);
-      setPlannerSteps([]);
+      setAgentSteps(NO_STEPS);
       setAnalysis(null);
       setBranch(null);
+      setSwapState("idle");
       setError(null);
       setUploadError(null);
       setPhase("uploading");
@@ -155,6 +206,10 @@ export function Workspace() {
 
         await sleep(400, controller.signal);
         setStage("results");
+
+        // Fire and forget, the moment the fork is on screen. Nothing waits on
+        // this: the advisor branch is fully usable while it runs.
+        void startCareerSwap();
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
 
@@ -175,7 +230,7 @@ export function Workspace() {
         setBusy(false);
       }
     },
-    [report],
+    [report, startCareerSwap],
   );
 
   function handleSignIn(user: AuthenticatedUser) {
@@ -189,14 +244,15 @@ export function Workspace() {
       await signOutCurrentUser();
     } finally {
       abortRef.current?.abort();
+      swapAbortRef.current?.abort();
       setSession(null);
       setFile(null);
       setStorageSteps([]);
-      setParserSteps([]);
-      setPlannerSteps([]);
+      setAgentSteps(NO_STEPS);
       setStoredResume(null);
       setAnalysis(null);
       setBranch(null);
+      setSwapState("idle");
       setError(null);
       setUploadError(null);
       setStage("landing");
@@ -211,12 +267,13 @@ export function Workspace() {
 
   function handleStartOver() {
     abortRef.current?.abort();
+    swapAbortRef.current?.abort();
     setFile(null);
     setStorageSteps([]);
-    setParserSteps([]);
-    setPlannerSteps([]);
+    setAgentSteps(NO_STEPS);
     setAnalysis(null);
     setBranch(null);
+    setSwapState("idle");
     setError(null);
     setUploadError(null);
     setStage("upload");
@@ -286,10 +343,14 @@ export function Workspace() {
 
         {stage === "analysis" ? (
           <AnalysisStage
-            parserSteps={parserSteps}
-            plannerSteps={plannerSteps}
-            parserState={cardState(parserSteps)}
-            plannerState={cardState(plannerSteps)}
+            agentSteps={agentSteps}
+            agentState={{
+              parser: cardState(agentSteps.parser),
+              planner: cardState(agentSteps.planner),
+              improver: cardState(agentSteps.improver),
+              advisor: cardState(agentSteps.advisor),
+              swapper: cardState(agentSteps.swapper),
+            }}
             profile={analysis?.profile ?? null}
             error={error}
             onRetry={() => file && void runPipeline(file)}
@@ -303,6 +364,7 @@ export function Workspace() {
         {stage === "results" && analysis && branch === null ? (
           <ResultsChoiceStage
             analysis={analysis}
+            swapState={swapState}
             onChoose={setBranch}
             onStartOver={handleStartOver}
           />
@@ -319,6 +381,8 @@ export function Workspace() {
         {stage === "results" && analysis && branch === "transitioner" ? (
           <TransitionerStage
             analysis={analysis}
+            swapState={swapState}
+            onRetrySwap={() => void startCareerSwap()}
             onBack={() => setBranch(null)}
             onSwitchBranch={() => setBranch("advisor")}
           />

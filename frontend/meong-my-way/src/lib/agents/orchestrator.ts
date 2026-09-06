@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { AnalysisBundle, RunCost } from "@/lib/contracts";
+import type { AnalysisBundle, CareerSwap, RunCost } from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
 import { readResumeBytes } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
@@ -12,30 +12,51 @@ import { improveResume } from "./resume-improver";
 import { parseResume } from "./resume-parser";
 import { planCareers } from "./career-planner";
 import { estimateCost } from "./cost";
-import { putAnalysisArtifact } from "./store";
+import { getAnalysis, putAnalysisArtifact } from "./store";
 
 /**
  * The pipeline, in the shape of the architecture diagram.
  *
  *   parser ──▶ (store) ──▶ planner ──┬──▶ improver
  *                                    ├──▶ advisor
- *                                    └──▶ swapper
+ *                                    └╌╌▶ swapper   (deferred — see below)
  *
- * Two ordering rules are load-bearing:
+ * Three ordering rules are load-bearing:
  *
  * 1. Nothing reaches the planner until the parser's output is stored. The
  *    diagram calls this out explicitly, and it is what makes a failed planner
  *    run resumable — the expensive part (reading the document, embedding it)
  *    is already durable.
  *
- * 2. The last three agents run concurrently. They share the planner's output
- *    and never read each other's, so serialising them would triple the wait
- *    for no benefit. `allSettled` keeps one failure from taking the others
- *    down: a run that loses the advisor still returns a plan and a critique.
+ * 2. The specialists run concurrently. They share the planner's output and
+ *    never read each other's, so serialising them would multiply the wait for
+ *    no benefit. `allSettled` keeps one failure from taking the others down: a
+ *    run that loses the advisor still returns a plan and a critique.
+ *
+ * 3. The swapper is *not* in that fan-out, and this is a deliberate latency
+ *    trade rather than an oversight. Measured end to end: parser 9s, planner
+ *    25s, then improver 12s / advisor 11s / swapper 32s in parallel — so the
+ *    swapper alone decided when the user saw anything, at 69s against the 50s
+ *    the other two needed. It is also the one agent whose output the results
+ *    screen does not show: that screen is a fork, and roughly half of the
+ *    people who reach it pick "further my career" and never open the swapper's
+ *    half at all.
+ *
+ *    So it is started separately, by `runCareerSwap`, as soon as the fork is
+ *    on screen — which means it runs while the user is reading rather than
+ *    while they are waiting, and is usually finished before the click that
+ *    needs it. Its routing is read back from storage rather than passed in,
+ *    which is what `PlanRouting` exists for.
  */
 
 /** Analyses expire after 30 days; the table's TTL attribute enforces it. */
 const ANALYSIS_TTL_DAYS = 30;
+
+/** What `runCareerSwap` produced, and what it cost on its own. */
+export type SwapRun = {
+  swap: CareerSwap;
+  cost: RunCost;
+};
 
 export type PipelineProgress = (
   event:
@@ -113,14 +134,28 @@ export async function runAnalysis(
   onProgress?.({ phase: "planning" });
   const planned = await planCareers(parsed.profile);
 
-  await putAnalysisArtifact({
-    userId: resume.userId,
-    artifact: "plan",
-    expiresAt,
-    payload: planned.plan,
-  });
+  await Promise.all([
+    putAnalysisArtifact({
+      userId: resume.userId,
+      artifact: "plan",
+      expiresAt,
+      payload: planned.plan,
+    }),
+    // The swapper runs after this request has already returned, so its routing
+    // has to outlive the process that computed it.
+    putAnalysisArtifact({
+      userId: resume.userId,
+      artifact: "routing",
+      expiresAt,
+      payload: {
+        sector: planned.sector,
+        searchKeywords: planned.searchKeywords,
+        adjacentKeywords: planned.adjacentKeywords,
+      },
+    }),
+  ]);
 
-  /* --- Agents 3, 4, 5: independent, so concurrent ----------------------- */
+  /* --- Agents 3 and 4: independent, so concurrent ------------------------ */
 
   onProgress?.({ phase: "specialists" });
   const vector = parsed.embedding.vector;
@@ -135,10 +170,9 @@ export async function runAnalysis(
     );
   }
 
-  const [improverOutcome, advisorOutcome, swapperOutcome] = await Promise.allSettled([
+  const [improverOutcome, advisorOutcome] = await Promise.allSettled([
     improveResume(parsed.profile, planned.plan, document),
     adviseOnIndustry(parsed.profile, vector, planned.sector, planned.searchKeywords),
-    findCareerSwaps(parsed.profile, vector, planned.sector, planned.adjacentKeywords),
   ]);
 
   if (improverOutcome.status === "rejected") {
@@ -147,15 +181,11 @@ export async function runAnalysis(
   if (advisorOutcome.status === "rejected") {
     console.error("[agents] advisor failed:", advisorOutcome.reason);
   }
-  if (swapperOutcome.status === "rejected") {
-    console.error("[agents] swapper failed:", swapperOutcome.reason);
-  }
 
   const improvement =
     improverOutcome.status === "fulfilled" ? improverOutcome.value : null;
   const advice =
     advisorOutcome.status === "fulfilled" ? advisorOutcome.value : null;
-  const swap = swapperOutcome.status === "fulfilled" ? swapperOutcome.value : null;
 
   await Promise.all(
     [
@@ -173,13 +203,6 @@ export async function runAnalysis(
           expiresAt,
           payload: advice.advice,
         }),
-      swap &&
-        putAnalysisArtifact({
-          userId: resume.userId,
-          artifact: "swapper",
-          expiresAt,
-          payload: swap.swap,
-        }),
     ].filter(Boolean),
   );
 
@@ -188,7 +211,6 @@ export async function runAnalysis(
     planned.usage,
     improvement?.usage,
     advice?.usage,
-    swap?.usage,
   ]);
 
   const cost: RunCost = estimateCost(usage, parsed.embedding.inputTokens);
@@ -211,7 +233,58 @@ export async function runAnalysis(
       formattingNotes: [],
     },
     advice: advice?.advice ?? null,
-    swap: swap?.swap ?? null,
+    // Always null here. The swapper has not been asked to run yet; the client
+    // starts it on the results screen and merges the result in. `null` and
+    // "failed" are the same value, which is why the client tracks the request
+    // state separately rather than inferring it from this field.
+    swap: null,
     cost,
+  };
+}
+
+/**
+ * Run the swapper on its own, against a run that already finished.
+ *
+ * Everything it needs is read back from storage, so this is safe to call from
+ * a separate request — and safe to call twice, since a second call simply
+ * overwrites the artifact with an equivalent one (temperature is 0).
+ *
+ * Returns `null` when the run it was asked about is not there, or lost the
+ * artefacts the swapper depends on. That is distinct from the swapper itself
+ * failing, which throws.
+ */
+export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
+  const stored = await getAnalysis(userId);
+
+  if (!stored.profile || !stored.embedding || !stored.routing) {
+    console.warn(
+      "[agents] career swap requested for a run with no profile, embedding or " +
+        "routing stored — the analysis was probably cleared underneath it.",
+    );
+    return null;
+  }
+
+  const result = await findCareerSwaps(
+    stored.profile,
+    stored.embedding.vector,
+    stored.routing.sector,
+    stored.routing.adjacentKeywords,
+  );
+
+  if (!result) return null;
+
+  await putAnalysisArtifact({
+    userId,
+    artifact: "swapper",
+    expiresAt: expiryTimestamp(),
+    payload: result.swap,
+  });
+
+  return {
+    swap: result.swap,
+    // The swapper's own spend, not the run's total. The client adds it to what
+    // the first response reported, so the figure on screen stays honest about
+    // everything that was actually paid for.
+    cost: estimateCost(result.usage, 0),
   };
 }

@@ -78,6 +78,14 @@ const AGENT_STEPS: Record<AgentId, { key: string; label: string }[]> = {
   ],
 };
 
+/**
+ * The agents this request actually runs.
+ *
+ * The swapper has its own endpoint and is started from the results screen, so
+ * it is deliberately absent — see `lib/agents/orchestrator.ts` for why.
+ */
+const NARRATED_AGENTS: AgentId[] = ["parser", "planner", "improver", "advisor"];
+
 function storageSteps(
   completed: Partial<Record<StorageStepKey, string>>,
   running: StorageStepKey | null,
@@ -194,13 +202,16 @@ export async function runResumePipeline(
   await Promise.all([
     narrate("improver", events, run, signal),
     narrate("advisor", events, run, signal),
-    narrate("swapper", events, run, signal),
   ]);
 
   const analysis = await run;
 
-  // Only now is every agent genuinely finished.
-  for (const agent of Object.keys(AGENT_STEPS) as AgentId[]) {
+  // The swapper is excluded on both counts. It is not part of this request —
+  // the results screen starts it once it is up — so narrating it would show
+  // work that is not happening, and completing it would claim a result that
+  // does not exist yet. Left untouched, its card stays on "Queued", which is
+  // exactly what it is.
+  for (const agent of NARRATED_AGENTS) {
     completeAgent(agent, events);
   }
 

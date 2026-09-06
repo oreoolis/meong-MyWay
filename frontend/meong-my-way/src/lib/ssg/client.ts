@@ -73,8 +73,10 @@ export type SsgJobRole = {
   code: string;
   title: string;
   track?: string;
+  /** Normalised to numbers; the API sends these as decimal strings. */
   salary?: { minimum?: number; maximum?: number };
   sector?: { id?: string; code?: string; title?: string };
+  /** Normalised to an array; the API sends a bare string. */
   descriptions?: string[];
   fieldOfStudy?: { code?: string; description?: string };
   qualification?: { code?: string; lvl1?: string; description?: string };
@@ -108,7 +110,21 @@ export type SsgSkillCode = {
   description: string;
 };
 
-type Envelope<T> = { data?: T; meta?: { total?: number }; status?: string };
+/**
+ * Every response arrives as HTTP 200. The real outcome is inside the body.
+ *
+ * A rejected request still answers `200 OK` with `{ data: {}, error: {...},
+ * status: 404 }` — so `response.ok` proves nothing, and `data` is present
+ * but empty rather than absent. Reading only the transport status turns every
+ * API rejection into a silent empty result, which is precisely how a bad query
+ * parameter went unnoticed while both market agents reported "no matches".
+ */
+type Envelope<T> = {
+  data?: T;
+  meta?: { total?: number };
+  status?: number | string;
+  error?: { code?: number; message?: string };
+};
 
 /* -------------------------------------------------------------------------
  * Transport
@@ -192,6 +208,19 @@ async function request<T>(
   }
 
   const payload = (await response.json()) as Envelope<T>;
+
+  // The envelope's own status is the authoritative one — see `Envelope`.
+  const innerStatus = Number(payload.status);
+  if (Number.isFinite(innerStatus) && innerStatus >= 400) {
+    throw new SsgApiError(
+      `Skills Framework API rejected the request (${innerStatus}${
+        payload.error?.message ? `: ${payload.error.message}` : ""
+      }).`,
+      innerStatus,
+      path,
+    );
+  }
+
   if (payload.data === undefined) {
     throw new SsgApiError("Skills Framework API returned no data.", 200, path);
   }
@@ -204,28 +233,99 @@ async function request<T>(
  * ---------------------------------------------------------------------- */
 
 export type JobRoleSearch = {
+  /**
+   * A SINGLE word. The endpoint answers `status: 500` for any keyword
+   * containing a space — see `searchJobRoles`.
+   */
   keyword?: string;
-  /** Sector IDs, comma-delimited by the API's own convention. */
+  /**
+   * A sector's numeric `id` from `listSectors`, comma-delimited for several.
+   * Not its `code`: `sector=ACC` is accepted and matches nothing, while
+   * `sector=15614` returns the 25 Accountancy roles.
+   */
   sector?: string;
   qualification?: string;
   fieldOfStudy?: string;
   track?: string;
   minSalary?: number;
   maxSalary?: number;
-  sortby?: "title" | "score";
-  sortDirection?: "asc" | "desc";
   page?: number;
   pageSize?: number;
 };
 
 /**
+ * The API returns `salary: { minimum: "3796.0", maximum: "5062.0" }` — decimal
+ * strings, or `null` where the framework publishes no band. Anything downstream
+ * does arithmetic and currency formatting on these, and `"3796.0"` is truthy,
+ * so an unconverted string reaches the UI looking like a number and formats as
+ * garbage.
+ */
+function toAmount(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : undefined;
+}
+
+/**
+ * Bring one role into the shape the rest of the app declares.
+ *
+ * `descriptions` is documented as a list but sent as a single string. The
+ * matcher calls `.join(" ")` on it, which throws `descriptions.join is not a
+ * function` — inside a `Promise.allSettled`, so every role is silently dropped
+ * and the agent sees an empty candidate set rather than an error.
+ */
+type RawJobRole = Omit<SsgJobRole, "descriptions" | "alternativeTitles" | "salary"> & {
+  descriptions?: unknown;
+  alternativeTitles?: unknown;
+  salary?: { minimum?: unknown; maximum?: unknown } | null;
+};
+
+function normaliseJobRole(raw: RawJobRole): SsgJobRole {
+  const { descriptions } = raw;
+
+  const salary = raw.salary
+    ? { minimum: toAmount(raw.salary.minimum), maximum: toAmount(raw.salary.maximum) }
+    : undefined;
+
+  return {
+    ...raw,
+    descriptions: Array.isArray(descriptions)
+      ? descriptions.filter((part): part is string => typeof part === "string")
+      : typeof descriptions === "string" && descriptions.trim()
+        ? [descriptions]
+        : undefined,
+    alternativeTitles: Array.isArray(raw.alternativeTitles)
+      ? raw.alternativeTitles
+      : undefined,
+    salary: salary?.minimum || salary?.maximum ? salary : undefined,
+  };
+}
+
+/**
  * Search job roles. The workhorse for both market-facing agents — it is the
  * only endpoint that filters by free-text keyword *and* returns salary,
  * sector, and qualification in one response.
+ *
+ * Two hard constraints, both established against the live host and neither
+ * documented:
+ *
+ * 1. `sortDirection` must not be sent. Any value — even the `asc` the API
+ *    reports as its own default in the `request` echo — makes it answer
+ *    `status: 404, "Not Found"`. `sortby` is accepted but inert: the results
+ *    are title-ascending whatever is passed. Re-ranking therefore has to
+ *    happen on our side, which the resume embedding already does better than
+ *    a keyword score would.
+ * 2. `keyword` must be one word. A keyword containing a space answers
+ *    `status: 500`, so "Data Analyst" returns nothing while "Analyst"
+ *    returns 33 roles including Data Analyst. Callers pass single tokens;
+ *    `role-matching.ts` splits phrases before it gets here.
+ *
+ * Both failures arrive as HTTP 200, which is why `request` inspects the
+ * envelope's own status.
  */
 export async function searchJobRoles(
   search: JobRoleSearch,
-): Promise<{ jobRoles: SsgJobRole[] }> {
+): Promise<{ jobRoles: SsgJobRole[]; total: number }> {
   const data = await request<{ jobRoles?: SsgJobRole[] }>(
     "/skillsFramework/jobRoles",
     {
@@ -236,19 +336,29 @@ export async function searchJobRoles(
       track: search.track,
       minSalary: search.minSalary,
       maxSalary: search.maxSalary,
-      // Ranking by relevance rather than the API's alphabetical default —
-      // the agents want the best matches, not the ones starting with "A".
-      sortby: search.sortby ?? "score",
-      sortDirection: search.sortDirection ?? "desc",
       page: search.page ?? 0,
-      pageSize: search.pageSize ?? 20,
+      // 20 is the practical ceiling: the endpoint returns 20 rows for
+      // pageSize=20 but drops back to 8 for 50 or 100.
+      pageSize: Math.min(search.pageSize ?? 20, 20),
     },
   );
 
-  return { jobRoles: data.jobRoles ?? [] };
+  const jobRoles = (data.jobRoles ?? []).map(normaliseJobRole);
+  return { jobRoles, total: jobRoles.length };
 }
 
-/** Up to five title matches for a keyword. Cheap way to test a term lands. */
+/**
+ * Job role titles.
+ *
+ * NOT a keyword search, despite the parameter: the endpoint returns the same
+ * ~1,457 titles whatever is passed, including for a keyword that matches
+ * nothing. Verified against the live host — "Nurse", "Chef" and "zzzzqqq" all
+ * return an identical list headed by "Engineer".
+ *
+ * Unused for that reason. Anything needing keyword filtering wants
+ * `searchJobRoles`, which does honour it. Kept only because it is the one
+ * endpoint that enumerates the whole taxonomy cheaply.
+ */
 export async function suggestJobRoleTitles(
   keyword: string,
 ): Promise<SsgJobRoleTitle[]> {

@@ -305,6 +305,36 @@ html {
   }
 }
 
+/*
+ * A folder travelling down a branch of the analysis tree.
+ *
+ * Animates `top`, not `transform`, for two reasons. Percentages of `top`
+ * resolve against the branch's own height, so one keyframe set serves branches
+ * of different lengths and the folder always stops exactly at the node below —
+ * a transform distance is a percentage of the *sprite*, which overshot into
+ * the cards. And leaving `transform` alone lets the element keep its own
+ * `translateX` centring instead of having it overwritten mid-animation.
+ *
+ * Branches clip their overflow, so the sprite is never visible outside the
+ * segment it belongs to.
+ */
+@keyframes mw-folder-down {
+  0% {
+    top: -60%;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
 @keyframes mw-blink {
   0%,
   45% {
@@ -327,6 +357,12 @@ html {
 
 .mw-blink {
   animation: mw-blink 1.1s steps(1, end) infinite;
+}
+
+/* Stepped like the other sprite motion, so the folder jitters down the branch
+   the way it hops across the office floor rather than gliding. */
+.mw-folder-down {
+  animation: mw-folder-down 1.6s steps(8, end) infinite;
 }
 
 /* Faint CRT scanlines over the loading panel. */
@@ -354,8 +390,14 @@ html {
   .mw-sweep::after,
   .mw-bob,
   .mw-hop,
-  .mw-blink {
+  .mw-blink,
+  .mw-folder-down {
     animation: none !important;
+  }
+  /* Purely decorative, and parked off its branch without the animation to
+     carry it — so it is withdrawn rather than left stranded mid-card. */
+  .mw-folder-down {
+    opacity: 0 !important;
   }
   .mw-rise,
   .mw-fade {

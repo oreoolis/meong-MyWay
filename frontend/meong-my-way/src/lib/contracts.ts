@@ -1,10 +1,12 @@
 /**
  * Shared types for the MyWay agent pipeline.
  *
- * These describe the payloads the two agents exchange. Today they are produced
- * by `lib/mock-agents.ts` entirely in the browser; when the Python backend
- * lands, it should serialize exactly these shapes so only the transport in
- * `mock-agents.ts` has to change.
+ * These describe the payloads the agents exchange, and they are the contract
+ * between `lib/agents/` on the server and `components/` in the browser: the
+ * agents produce these shapes, the API routes serialize them unchanged, and
+ * the stages render them. Nothing here is specific to a transport, which is
+ * what lets an agent move between requests — as the career swapper did — with
+ * no type changing.
  */
 
 /* -------------------------------------------------------------------------
@@ -181,6 +183,20 @@ export type ResumeImprovement = {
  * Agent 4 — Industry Advisor
  * ---------------------------------------------------------------------- */
 
+/**
+ * Where a recommendation's facts came from.
+ *
+ *  - framework: real Skills Framework roles, matched by embedding. Salary
+ *    bands are the framework's published figures.
+ *  - reasoned:  the model's own account of the Singapore market, used when the
+ *    framework returned nothing to match against. Directionally useful, but
+ *    the figures are estimates and the UI must say so.
+ *
+ * This is carried through to the UI rather than kept server-side because the
+ * distinction changes how much weight a reader should give a salary band.
+ */
+export type EvidenceBasis = "framework" | "reasoned";
+
 /** A role from the Skills Framework, scored against this resume. */
 export type MatchedRole = {
   /** Skills Framework job-role ID, so a caller can look the role back up. */
@@ -205,11 +221,39 @@ export type IndustryAdvice = {
   advice: string[];
   /** How many Skills Framework roles were considered to produce this. */
   rolesConsidered: number;
+  basis: EvidenceBasis;
 };
 
 /* -------------------------------------------------------------------------
  * Agent 5 — Career Swapper
  * ---------------------------------------------------------------------- */
+
+/**
+ * A real, publicly funded place a person can talk to a human about a switch.
+ *
+ * These are fixed records, not model output. A hallucinated phone number or
+ * invented agency is the one failure mode that would actively harm someone
+ * acting on this page, so the list is a verified constant in
+ * `lib/agents/coaches.ts` and the model is only ever allowed to say what to
+ * ask once they get there.
+ */
+export type CareerCoach = {
+  id: string;
+  organisation: string;
+  service: string;
+  description: string;
+  url: string;
+  /** What this particular service is the right door for. */
+  bestFor: string;
+  cost: string;
+};
+
+/** What to walk into a coaching session with, given the destinations found. */
+export type CoachBrief = {
+  summary: string;
+  /** Specific questions, naming the destinations this user was shown. */
+  questions: string[];
+};
 
 export type CareerSwap = {
   /** Sectors other than the user's own, ordered by how reachable they are. */
@@ -218,6 +262,10 @@ export type CareerSwap = {
   portableSkills: string[];
   note: string;
   rolesConsidered: number;
+  basis: EvidenceBasis;
+  /** Verified services. Constant, never model-generated. */
+  coaches: CareerCoach[];
+  coachBrief: CoachBrief | null;
 };
 
 /* -------------------------------------------------------------------------
@@ -260,6 +308,33 @@ export type StoredEmbedding = {
 };
 
 /**
+ * Where the planner pointed the two framework agents.
+ *
+ * Persisted rather than held in memory because the swapper no longer runs
+ * inside the main request. It is started separately once the results screen is
+ * on the user's display, and by then the planner's process-local output is
+ * long gone — so the routing it needs has to survive the response that
+ * produced it. Nothing here is shown to the user; it is agent plumbing.
+ */
+export type PlanRouting = {
+  sector: { id: string; title: string };
+  /** Title terms for searching inside the current sector. */
+  searchKeywords: string[];
+  /** Title terms for sectors this person could credibly move into. */
+  adjacentKeywords: string[];
+};
+
+/**
+ * How far the deferred career-swapper request has got.
+ *
+ * Needed because `AnalysisBundle.swap` is `null` in three different
+ * situations — not asked for yet, in flight, and failed — which the results
+ * screen has to tell apart. "done" covers a successful run that found nothing,
+ * since an empty list is an answer rather than an error.
+ */
+export type SwapRequestState = "idle" | "loading" | "done" | "failed";
+
+/**
  * A previous run, read back from storage.
  *
  * Keyed by artifact rather than shaped like `AnalysisBundle` because each
@@ -271,6 +346,7 @@ export type StoredAnalysis = {
   profile?: ResumeProfile;
   embedding?: StoredEmbedding;
   plan?: CareerPlan;
+  routing?: PlanRouting;
   improver?: ResumeImprovement;
   advisor?: IndustryAdvice;
   swapper?: CareerSwap;

@@ -1,8 +1,30 @@
 import type { AgentStep } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 import { CheckIcon } from "./icons";
+import { ProgressBar } from "./primitives";
 
 export type AgentCardState = "idle" | "running" | "done";
+
+/**
+ * How far through its steps an agent is.
+ *
+ * A running step counts as half. That is not a claim about the step's internal
+ * state — nothing reports that — it is what stops the bar sitting still for
+ * the whole of a step and then jumping a third of the way at once. Half is the
+ * expected value of a step you know has started and not finished, so it is
+ * also the reading that is least wrong on average.
+ */
+function stepProgress(steps: AgentStep[]): number {
+  if (steps.length === 0) return 0;
+
+  const credit = steps.reduce((total, step) => {
+    if (step.status === "done") return total + 1;
+    if (step.status === "running") return total + 0.5;
+    return total;
+  }, 0);
+
+  return (credit / steps.length) * 100;
+}
 
 /**
  * One agent's live working trace: its steps, what each produced, and whether
@@ -58,14 +80,25 @@ export function AgentTrace({
         </div>
       </div>
 
+      {/* The card's own bar, above the steps it summarises. Present in every
+          state so the row of cards keeps one baseline and does not reflow as
+          agents start and finish. */}
+      <ProgressBar
+        className="mt-4"
+        size="sm"
+        value={state === "done" ? 100 : stepProgress(steps)}
+        active={state === "running"}
+        label={`${name} progress`}
+      />
+
       {steps.length > 0 ? (
-        <ol className="mt-4 space-y-0.5">
+        <ol className="mt-3 space-y-0.5">
           {steps.map((step) => (
             <StepRow key={step.key} step={step} />
           ))}
         </ol>
       ) : (
-        <p className="mt-4 text-[13px] text-ink-muted">
+        <p className="mt-3 text-[13px] text-ink-muted">
           Waiting for the previous agent to hand off.
         </p>
       )}

@@ -4,7 +4,7 @@ import { buildTextPdf, SAMPLE_RESUME_LINES } from "../../../test/fixtures/resume
 import { deleteResume, putResume } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
 import { deleteAnalysis, getAnalysis } from "./store";
-import { runAnalysis } from "./orchestrator";
+import { runAnalysis, runCareerSwap, type SwapRun } from "./orchestrator";
 import { hasSsgCredentials } from "@/lib/ssg/oauth";
 import type { AnalysisBundle } from "@/lib/contracts";
 
@@ -32,6 +32,8 @@ const DEV_SERVER = process.env.DEV_SERVER_URL ?? "http://localhost:3000";
 
 let resume: StoredResume;
 let analysis: AnalysisBundle;
+/** The deferred sixth step, run the way the results screen runs it. */
+let swapRun: SwapRun | null;
 
 beforeAll(async () => {
   const bytes = buildTextPdf(SAMPLE_RESUME_LINES);
@@ -47,7 +49,22 @@ beforeAll(async () => {
   });
 
   resume = stored.resume;
+  const t0 = Date.now();
   analysis = await runAnalysis(resume);
+  console.info(
+    `[timing] main analysis (what the user waits for): ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+  );
+  const t1 = Date.now();
+
+  // Deliberately a second call against stored state rather than a value
+  // threaded out of the first. That is exactly how production reaches it —
+  // a separate request, a different process, nothing in memory — so a
+  // regression that left the swapper depending on the planner's live output
+  // fails here rather than in the browser.
+  swapRun = await runCareerSwap(TEST_USER_ID);
+  console.info(
+    `[timing] deferred swapper (runs behind the results screen): ${((Date.now() - t1) / 1000).toFixed(1)}s`,
+  );
 });
 
 afterAll(async () => {
@@ -180,7 +197,21 @@ framework("agents 4 and 5 — the Skills Framework agents", () => {
       "industry advisor returned null despite credentials being configured",
     ).not.toBeNull();
 
-    expect(analysis.advice!.rolesConsidered).toBeGreaterThan(0);
+    // Both agents fall back to reasoning when the framework has nothing for a
+    // resume, so `basis` decides which assertions apply. Asserting the
+    // grounded shape unconditionally would make a legitimate fallback look
+    // like a regression; asserting neither would let a silently broken
+    // framework lookup pass as a successful run, which is the failure this
+    // suite exists to catch. So the fallback is allowed, and reported.
+    if (analysis.advice!.basis === "reasoned") {
+      console.warn(
+        "[itest] advisor fell back to reasoning — the framework returned no " +
+          "roles for this sector.",
+      );
+      expect(analysis.advice!.positioning).toBeTruthy();
+    } else {
+      expect(analysis.advice!.rolesConsidered).toBeGreaterThan(0);
+    }
 
     for (const role of analysis.advice!.matchedRoles) {
       // A role that survived the ID join came from the API, so it has a real
@@ -192,16 +223,47 @@ framework("agents 4 and 5 — the Skills Framework agents", () => {
     }
   });
 
+  /**
+   * The swapper is deferred, so the main bundle must not carry it. Pinning
+   * this is what stops the latency win being quietly undone: putting the agent
+   * back into the eager fan-out would make this go red.
+   */
+  it("leaves the swapper out of the main run", () => {
+    expect(analysis.swap).toBeNull();
+  });
+
   it("offers only out-of-sector destinations", () => {
     expect(
-      analysis.swap,
+      swapRun,
       "career swapper returned null despite credentials being configured",
     ).not.toBeNull();
 
-    expect(analysis.swap!.destinations.length).toBeGreaterThan(0);
-    for (const destination of analysis.swap!.destinations) {
+    expect(swapRun!.swap.destinations.length).toBeGreaterThan(0);
+    for (const destination of swapRun!.swap.destinations) {
       expect(destination.id).toBeTruthy();
       expect(["progression", "adjacent", "pivot"]).toContain(destination.kind);
+    }
+
+    if (swapRun!.swap.basis === "reasoned") {
+      console.warn(
+        "[itest] swapper fell back to reasoning — the framework returned no " +
+          "out-of-sector roles.",
+      );
+    } else {
+      expect(swapRun!.swap.rolesConsidered).toBeGreaterThan(0);
+    }
+  });
+
+  it("always offers a route to a real career coach", () => {
+    expect(swapRun).not.toBeNull();
+
+    // The coach list is a constant, so this is really asserting that the
+    // swapper cannot return a swap without it — a destination with no next
+    // step is the state this branch is meant to stop producing.
+    expect(swapRun!.swap.coaches.length).toBeGreaterThan(0);
+    for (const coach of swapRun!.swap.coaches) {
+      expect(coach.url).toMatch(/^https:\/\//);
+      expect(coach.organisation).toBeTruthy();
     }
   });
 });
@@ -216,25 +278,56 @@ describe("the run as a whole", () => {
     expect(stored.embedding).toBeDefined();
     expect(stored.plan).toBeDefined();
 
+    // The routing the deferred swapper reads back. Without it that agent
+    // cannot run at all from a second request, so its absence would be a
+    // silent break of the whole transitioner branch.
+    expect(stored.routing).toBeDefined();
+    expect(stored.routing!.adjacentKeywords.length).toBeGreaterThan(0);
+
     // The specialists are stored only if they ran, which is the same
     // condition as their presence in the bundle.
     expect(Boolean(stored.advisor)).toBe(analysis.advice !== null);
-    expect(Boolean(stored.swapper)).toBe(analysis.swap !== null);
+    // Written by `runCareerSwap`, not by the main run.
+    expect(Boolean(stored.swapper)).toBe(swapRun !== null);
   });
 
   it("stays inside the per-run cost budget", () => {
     expect(analysis.cost.inputTokens).toBeGreaterThan(0);
     expect(analysis.cost.outputTokens).toBeGreaterThan(0);
 
-    // The ASR is a $20 total budget. A cent a run leaves room for 2,000 runs,
-    // so this fails loudly if a prompt change makes a run an order of
-    // magnitude more expensive than the measured ~$0.004.
-    expect(analysis.cost.estimatedUsd).toBeLessThan(0.01);
+    // The swapper bills separately now, so the budget has to be checked
+    // against the sum — this is the figure the results screen shows once both
+    // requests have landed, and checking only the first half would let the
+    // deferral hide spend rather than merely move it.
+    const totalUsd = analysis.cost.estimatedUsd + (swapRun?.cost.estimatedUsd ?? 0);
+
+    // The ASR is a $20 total budget. ADR-0002 bounds a Haiku 4.5 run by
+    // summing every agent's maxTokens ceiling, against a measured typical of
+    // ~$0.078 — so the budget cannot be spent in fewer than ~115 analyses
+    // however the models behave.
+    //
+    // The threshold is that computed ceiling rather than a margin over the
+    // measured cost: a run that exceeds it means an agent's maxTokens grew, a
+    // model changed, or the rate table in cost.ts went stale — each of which
+    // invalidates the budget arithmetic and should fail here rather than on
+    // the bill.
+    //
+    // The ceiling counts the advisor and the swapper *twice*. Both run a
+    // grounded tier and fall back to a reasoned one, and the fallback is not
+    // exclusive: a grounded call that returns a reply naming no valid role ID
+    // has already been paid for when the reasoned call fires. Summing them
+    // once — as this figure originally did — understated the true ceiling by
+    // $0.03, which is the kind of error that only shows up on a bill.
+    //
+    //   parser 4096 + planner 4096 + improver 3072
+    //   + advisor 2048x2 + swapper 8192x2  = 31,744 out  -> $0.159
+    //   + ~15,000 in                                     -> $0.015
+    expect(totalUsd).toBeLessThan(0.174);
 
     console.info(
-      `run cost: $${analysis.cost.estimatedUsd.toFixed(6)} ` +
-        `(${analysis.cost.inputTokens} in / ${analysis.cost.outputTokens} out / ` +
-        `${analysis.cost.embeddingTokens} embed)`,
+      `run cost: $${totalUsd.toFixed(6)} ` +
+        `(analysis $${analysis.cost.estimatedUsd.toFixed(6)} + ` +
+        `swap $${(swapRun?.cost.estimatedUsd ?? 0).toFixed(6)})`,
     );
   });
 });

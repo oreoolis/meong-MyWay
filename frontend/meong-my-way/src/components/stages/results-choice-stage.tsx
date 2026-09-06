@@ -1,8 +1,10 @@
 "use client";
 
-import type { AnalysisBundle } from "@/lib/contracts";
-import { Button, Card, SectionLabel } from "@/components/ui/primitives";
+import type { AnalysisBundle, SwapRequestState } from "@/lib/contracts";
+import { Button, ProgressBar, SectionLabel } from "@/components/ui/primitives";
 import { ArrowRightIcon, RouteIcon, TrendUpIcon } from "@/components/ui/icons";
+import { SWAPPER_ESTIMATE_MS } from "@/lib/agents/timings";
+import { useEstimatedProgress } from "@/lib/use-estimated-progress";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,6 +29,10 @@ type DoorProps = {
   icon: React.ReactNode;
   disabled: boolean;
   disabledReason: string;
+  /** Work is still running behind this door — dim it, but do not dishearten. */
+  pending?: boolean;
+  /** 0–100, only read while `pending`. */
+  progress?: number;
   onSelect: () => void;
 };
 
@@ -37,6 +43,8 @@ function Door({
   icon,
   disabled,
   disabledReason,
+  pending = false,
+  progress = 0,
   onSelect,
 }: DoorProps) {
   return (
@@ -70,36 +78,110 @@ function Door({
         <p className="mt-1.5 text-[14.5px] leading-relaxed text-ink-2">{subtitle}</p>
       </div>
 
-      <p className="mt-6 flex items-center gap-2 text-[12.5px] text-ink-muted">
-        {disabled ? (
-          disabledReason
-        ) : (
-          <>
-            {detail}
-            <ArrowRightIcon className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-          </>
-        )}
-      </p>
+      {pending ? (
+        <div className="mt-6">
+          <ProgressBar
+            value={progress}
+            active
+            size="sm"
+            label="Career swapper progress"
+            hint={disabledReason}
+          />
+          <p className="mt-2 text-[12px] text-ink-muted">
+            Usually about 30 seconds. The other branch is ready now.
+          </p>
+        </div>
+      ) : (
+        <p className="mt-6 flex items-center gap-2 text-[12.5px] text-ink-muted">
+          {disabled ? (
+            disabledReason
+          ) : (
+            <>
+              {detail}
+              <ArrowRightIcon className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+            </>
+          )}
+        </p>
+      )}
     </button>
   );
 }
 
+/**
+ * What the transitioner door says, given how far its agent has got.
+ *
+ * The swapper is started when this screen renders rather than during the run,
+ * so for the first half-minute the branch is genuinely pending rather than
+ * broken. Saying "could not be reached" during that window — which is what an
+ * earlier version did, because it read an absent `swap` as a failure — tells
+ * the user their result is gone while it is still being written.
+ */
+function transitionerDoor(
+  analysis: AnalysisBundle,
+  swapState: SwapRequestState,
+): { detail: string; disabled: boolean; disabledReason: string } {
+  const found = analysis.swap?.destinations.length ?? 0;
+
+  if (found > 0) {
+    return {
+      detail: `${found} sectors within reach`,
+      disabled: false,
+      disabledReason: "",
+    };
+  }
+
+  if (swapState === "idle" || swapState === "loading") {
+    return {
+      detail: "",
+      disabled: true,
+      disabledReason: "Looking for sectors you could move into…",
+    };
+  }
+
+  if (swapState === "failed") {
+    return {
+      detail: "",
+      disabled: true,
+      disabledReason: "The career swapper could not be reached — open to retry",
+    };
+  }
+
+  return {
+    detail: "",
+    disabled: true,
+    disabledReason: "No out-of-sector destinations were found for this resume",
+  };
+}
+
 export function ResultsChoiceStage({
   analysis,
+  swapState,
   onChoose,
   onStartOver,
 }: {
   analysis: AnalysisBundle;
+  swapState: SwapRequestState;
   onChoose: (branch: ResultsBranch) => void;
   onStartOver: () => void;
 }) {
   // The advisor branch still works without the framework agent, since the planner
   // and improver carry it, so it is only unavailable if the plan itself is.
   const advisorReady = analysis.plan.paths.length > 0;
-  const transitionerReady = (analysis.swap?.destinations.length ?? 0) > 0;
+  const transitioner = transitionerDoor(analysis, swapState);
+
+  // A failed swap is still worth opening: that branch owns the retry, and the
+  // coach list underneath it is a constant that does not depend on the agent.
+  const transitionerDisabled = transitioner.disabled && swapState !== "failed";
 
   const roleCount =
     (analysis.advice?.matchedRoles.length ?? 0) + analysis.plan.paths.length;
+
+  const swapPending = swapState === "idle" || swapState === "loading";
+  const swapProgress = useEstimatedProgress({
+    active: swapPending,
+    done: swapState === "done" || swapState === "failed",
+    estimateMs: SWAPPER_ESTIMATE_MS,
+  });
 
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
@@ -135,26 +217,15 @@ export function ResultsChoiceStage({
         <Door
           title="Career Transitioner"
           subtitle="I want to move to a new industry"
-          detail={`${analysis.swap?.destinations.length ?? 0} sectors within reach`}
+          detail={transitioner.detail}
           icon={<RouteIcon className="h-5 w-5" />}
-          disabled={!transitionerReady}
-          disabledReason="No cross-sector matches were found for this resume"
+          disabled={transitionerDisabled}
+          disabledReason={transitioner.disabledReason}
+          pending={swapPending}
+          progress={swapProgress}
           onSelect={() => onChoose("transitioner")}
         />
       </div>
-
-      {/* Both branches read the same underlying analysis, so the choice is
-          reversible and worth saying so: it stops the fork feeling final. */}
-      <Card className="mt-8 flex flex-wrap items-center justify-between gap-3 p-5">
-        <p className="text-[13px] text-ink-2">
-          Both views come from the same run. You can switch between them at any
-          time.
-        </p>
-        <p className="text-[12px] tabular-nums text-ink-muted">
-          {analysis.cost.inputTokens + analysis.cost.outputTokens} tokens · $
-          {analysis.cost.estimatedUsd.toFixed(4)}
-        </p>
-      </Card>
     </div>
   );
 }

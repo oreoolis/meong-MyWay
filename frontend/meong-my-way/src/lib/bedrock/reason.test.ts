@@ -88,4 +88,61 @@ describe("extractJson", () => {
       /unterminated/,
     );
   });
+
+  /**
+   * The shape that produced a 502 in production.
+   *
+   * The old fence expression was lazy and unanchored, so it ended the body at
+   * the first ``` it saw — including one inside a string value — and the
+   * truncated remainder was reported as "unterminated JSON object". The reply
+   * was complete and valid; only the extractor was wrong.
+   */
+  it("ignores a code fence inside a string value", () => {
+    const reply = '```json\n{"evidence":"documented in ``` blocks","impact":"low"}\n```';
+    expect(JSON.parse(extractJson(reply))).toEqual({
+      evidence: "documented in ``` blocks",
+      impact: "low",
+    });
+  });
+
+  it("unwraps a fence even when commentary follows it", () => {
+    const reply = '```json\n{"pages":2}\n```\n\nThat is the profile.';
+    expect(JSON.parse(extractJson(reply))).toEqual({ pages: 2 });
+  });
+
+  it("takes the first object when the model emits two fenced blocks", () => {
+    const reply = '```json\n{"a":1}\n```\nAnd an alternative:\n```json\n{"b":2}\n```';
+    expect(JSON.parse(extractJson(reply))).toEqual({ a: 1 });
+  });
+
+  /**
+   * A model quoting a multi-line resume bullet sometimes emits the newline
+   * raw. The reply is otherwise correct, so it is repaired rather than
+   * costing the user the whole run.
+   */
+  it("repairs a raw newline inside a string value", () => {
+    const reply = '{"before":"Led the team\nand shipped it","impact":"high"}';
+    expect(JSON.parse(extractJson(reply))).toEqual({
+      before: "Led the team\nand shipped it",
+      impact: "high",
+    });
+  });
+
+  it("repairs a raw tab inside a string value", () => {
+    const reply = '{"after":"Cut latency\tby 40%"}';
+    expect(JSON.parse(extractJson(reply))).toEqual({ after: "Cut latency\tby 40%" });
+  });
+
+  it("does not touch a reply that already parses", () => {
+    const reply = '{"note":"escaped\\nnewline stays escaped"}';
+    expect(JSON.parse(extractJson(reply))).toEqual({
+      note: "escaped\nnewline stays escaped",
+    });
+  });
+
+  it("names the tail of the reply when nothing parses", () => {
+    expect(() => extractJson('{"paths":[{"title":"Data Analyst"')).toThrow(
+      /ends: /,
+    );
+  });
 });

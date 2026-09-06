@@ -7,6 +7,7 @@ import type {
   CareerPlan,
   CareerSwap,
   IndustryAdvice,
+  PlanRouting,
   ResumeImprovement,
   ResumeProfile,
   StoredAnalysis,
@@ -29,6 +30,7 @@ export const ANALYSIS_ARTIFACTS = [
   "profile",
   "embedding",
   "plan",
+  "routing",
   "improver",
   "advisor",
   "swapper",
@@ -41,6 +43,7 @@ type ArtifactPayloads = {
   profile: ResumeProfile;
   embedding: StoredEmbedding;
   plan: CareerPlan;
+  routing: PlanRouting;
   improver: ResumeImprovement;
   advisor: IndustryAdvice;
   swapper: CareerSwap;

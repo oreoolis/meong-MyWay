@@ -26,6 +26,8 @@ const PALETTE: Record<string, string> = {
   E: "#1b1030", // eyes
   M: "#a8654a", // mouth
   S: "#4de0c8", // shirt (the station colour replaces this)
+  O: "#f2b134", // folder face
+  o: "#b9791a", // folder edge
   D: "#8b6b4a", // desk top
   L: "#5f4830", // desk legs / shadow
   W: "#fdf6d8", // paper
@@ -57,6 +59,25 @@ const DOCUMENT = [
   "WWWWWWW",
   "WKKKW.W",
   "WWWWWWW",
+];
+
+/**
+ * A manila folder with a sheet peeking out: the same work, in transit.
+ *
+ * The loader shows one document crossing an office floor; the analysis tree
+ * shows the same handoffs as a top-down graph. Reusing the sprite vocabulary
+ * across both is what makes them read as one system rather than two unrelated
+ * animations — a folder dropping down a branch is recognisably the document
+ * the clerks were passing.
+ */
+const FOLDER = [
+  "ooo.....",
+  "oOOooooo",
+  "oWWWWWWo",
+  "oOOOOOOo",
+  "oOOOOOOo",
+  "oOOOOOOo",
+  "oooooooo",
 ];
 
 function PixelGrid({
@@ -104,6 +125,17 @@ function PixelGrid({
       )}
     </svg>
   );
+}
+
+/**
+ * The travelling folder, for callers outside this screen.
+ *
+ * Deliberately just the sprite: the motion belongs to whatever is moving it,
+ * because the tree animates a drop down a branch while the loader slides one
+ * across a floor.
+ */
+export function PixelFolder({ cell = 3 }: { cell?: number }) {
+  return <PixelGrid rows={FOLDER} cell={cell} />;
 }
 
 /* -------------------------------------------------------------------------

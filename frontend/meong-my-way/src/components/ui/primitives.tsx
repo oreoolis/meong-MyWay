@@ -174,26 +174,92 @@ export function Meter({
 }
 
 /* -------------------------------------------------------------------------
- * Stat tile: label / value, optionally with a footnote.
+ * Progress bar: work in flight, as opposed to `Meter`'s finished measurement.
+ *
+ * Separate from `Meter` because they answer different questions and are read
+ * differently. A meter shows a score that is already true — 78 out of 100, and
+ * it will still be 78 tomorrow. A progress bar shows how far along something
+ * is *right now*, which means it also has to express "still going" when the
+ * number has not moved for eight seconds. That is the shimmer's job.
+ *
+ * `role="progressbar"` rather than `role="meter"` for the same reason: they
+ * are announced differently, and a screen reader user waiting on an agent
+ * wants the one that means "in progress".
  * ---------------------------------------------------------------------- */
 
-export function StatTile({
-  label,
+export function ProgressBar({
   value,
-  footnote,
+  label,
+  hint,
+  /** Overlay a travelling highlight, to show liveness between value changes. */
+  active = false,
+  size = "md",
   className,
 }: {
+  /** 0–100. */
+  value: number;
+  /** Announced to assistive tech; rendered only when `hint` is absent. */
   label: string;
-  value: string;
-  footnote?: string;
+  /** Short status line shown beside the percentage. */
+  hint?: string;
+  active?: boolean;
+  size?: "md" | "sm";
   className?: string;
 }) {
+  const clamped = Math.max(0, Math.min(100, value));
+
   return (
-    <div className={cn("rounded-xl border border-hairline bg-surface p-4", className)}>
-      <p className="text-[12px] text-ink-muted">{label}</p>
-      {/* Proportional figures: these are standalone values, not a column. */}
-      <p className="mt-1 text-[22px] font-semibold leading-tight text-ink">{value}</p>
-      {footnote ? <p className="mt-1 text-[12px] text-ink-2">{footnote}</p> : null}
+    <div className={className}>
+      {hint ? (
+        <div className="mb-1.5 flex items-baseline justify-between gap-3">
+          <span
+            className={cn(
+              "text-ink-2",
+              size === "md" ? "text-[12.5px]" : "text-[12px]",
+            )}
+          >
+            {hint}
+          </span>
+          <span
+            className={cn(
+              "font-medium tabular-nums text-ink-muted",
+              size === "md" ? "text-[12px]" : "text-[11.5px]",
+            )}
+          >
+            {Math.round(clamped)}%
+          </span>
+        </div>
+      ) : null}
+
+      <div
+        role="progressbar"
+        aria-valuenow={Math.round(clamped)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={label}
+        className={cn(
+          "relative w-full overflow-hidden rounded-full bg-track",
+          size === "md" ? "h-1.5" : "h-1",
+        )}
+      >
+        <div
+          className={cn(
+            "h-full rounded-full bg-accent transition-[width] duration-700 ease-out",
+          )}
+          style={{ width: `${clamped}%` }}
+        />
+
+        {/* Rides on top of the fill rather than replacing it, so the bar says
+            both "this far" and "still moving" at once. Withdrawn under
+            prefers-reduced-motion by the rule in globals.css. */}
+        {active ? (
+          <span
+            aria-hidden="true"
+            className="mw-sweep absolute inset-0 overflow-hidden rounded-full"
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
+

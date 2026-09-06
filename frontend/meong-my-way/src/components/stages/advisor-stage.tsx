@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { AnalysisBundle, ResumeRewrite } from "@/lib/contracts";
 import { Button, Card, Chip, Meter, SectionLabel } from "@/components/ui/primitives";
-import { PathCard } from "@/components/ui/path-card";
+import { ComparePaths } from "@/components/ui/compare-paths";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { cn, formatCompactMoney } from "@/lib/utils";
 
@@ -198,10 +198,12 @@ export function AdvisorStage({
           <h2 className="text-[19px] font-semibold tracking-tight text-ink">
             {paths.length} paths worth considering
           </h2>
-          <div className="mt-5 space-y-4">
-            {paths.map((path, index) => (
-              <PathCard key={path.id} path={path} rank={index} />
-            ))}
+          <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
+            Best match first. Each one is set against your resume on the same
+            questions, so the tabs change the answers rather than the frame.
+          </p>
+          <div className="mt-5">
+            <ComparePaths paths={paths} profile={profile} />
           </div>
         </section>
       ) : null}

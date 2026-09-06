@@ -2,7 +2,12 @@
 
 import { fetchAuthSession } from "aws-amplify/auth";
 
-import type { AnalysisBundle, StoredAnalysis } from "@/lib/contracts";
+import type {
+  AnalysisBundle,
+  CareerSwap,
+  RunCost,
+  StoredAnalysis,
+} from "@/lib/contracts";
 
 /**
  * Browser-side access to `/api/analysis`.
@@ -82,10 +87,14 @@ export async function fetchAnalysis(
 }
 
 /**
- * Run the five agents.
+ * Run the agents.
  *
- * Long-running by nature — five sequential model calls — so callers should
- * expect this to take tens of seconds and must pass a signal they can abort.
+ * Long-running by nature — sequential model calls — so callers should expect
+ * this to take tens of seconds and must pass a signal they can abort.
+ *
+ * The returned bundle always has `swap: null`. The career swapper is started
+ * separately by `requestCareerSwap` once the results screen is up, because it
+ * is the slowest agent and only one of the two branches needs it.
  */
 export async function runAnalysis(signal?: AbortSignal): Promise<AnalysisBundle> {
   const response = await fetch("/api/analysis", {
@@ -99,4 +108,32 @@ export async function runAnalysis(signal?: AbortSignal): Promise<AnalysisBundle>
 
   const body = (await response.json()) as { analysis: AnalysisBundle };
   return body.analysis;
+}
+
+/** What the swapper produced, plus what that one agent cost on its own. */
+export type CareerSwapResult = {
+  swap: CareerSwap | null;
+  cost: RunCost | null;
+};
+
+/**
+ * Run the career swapper against the analysis already on file.
+ *
+ * Resolves with `swap: null` when there was nothing to work from or the agent
+ * found no destinations — both are ordinary outcomes the UI renders the same
+ * way. It throws only on a genuine failure, which the caller can retry.
+ */
+export async function requestCareerSwap(
+  signal?: AbortSignal,
+): Promise<CareerSwapResult> {
+  const response = await fetch("/api/analysis/swap", {
+    method: "POST",
+    cache: "no-store",
+    headers: await authHeaders(),
+    signal,
+  });
+
+  if (!response.ok) throw await failure(response);
+
+  return (await response.json()) as CareerSwapResult;
 }

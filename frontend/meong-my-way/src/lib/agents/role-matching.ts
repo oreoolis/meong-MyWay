@@ -6,6 +6,7 @@ import {
   autocompleteTechnicalSkills,
   dedupeJobRoles,
   gatherSettled,
+  MIN_KEYWORD_LENGTH,
   searchJobRoles,
   stripHighlight,
   SsgCredentialsError,
@@ -33,7 +34,7 @@ import { hasSsgCredentials } from "@/lib/ssg/oauth";
  * but the whole set runs before the agent can start reasoning, so this is a
  * latency ceiling as much as a cost one.
  */
-const MAX_ROLES_TO_SCORE = 16;
+const MAX_ROLES_TO_SCORE = 24;
 
 /** How many survive into the prompt. */
 const MAX_ROLES_TO_PROMPT = 8;
@@ -64,17 +65,73 @@ function roleText(role: SsgJobRole): string {
 }
 
 /**
+ * Words that cost a request and buy no recall.
+ *
+ * Structural glue plus seniority modifiers. Dropping "Senior" from "Senior
+ * Data Analyst" is safe because the embedding re-ranks afterwards and knows
+ * far more about seniority from the resume than a title search does — whereas
+ * searching "Senior" on its own returns a wide, uninformative slice.
+ */
+const KEYWORD_STOPWORDS = new Set([
+  "and", "the", "of", "for", "in", "with", "to", "at", "on",
+  "senior", "junior", "assistant", "associate", "principal", "deputy",
+  "trainee", "entry", "level", "staff",
+]);
+
+/** A ceiling on the fan-out, since each token is its own request. */
+const MAX_SEARCH_TOKENS = 8;
+
+/**
+ * Turn job-title phrases into keywords the endpoint will actually answer.
+ *
+ * The planner is asked for real job titles, so it returns things like "Data
+ * Analyst" and "Supply Chain Manager". The endpoint answers `status: 500` for
+ * any keyword containing a space, so every one of those phrases searched as
+ * written returns nothing — which is what left both market agents with an
+ * empty candidate set regardless of how good the resume embedding was.
+ *
+ * Splitting on whitespace fixes it and improves recall besides: "Analyst"
+ * returns 33 roles spanning Finance, ICT, Media and Wholesale Trade, and the
+ * embedding then picks the ones this résumé actually resembles. Searching the
+ * exact phrase would have been the narrower question anyway.
+ */
+export function searchTokens(keywords: string[]): string[] {
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+
+  for (const keyword of keywords) {
+    for (const raw of keyword.split(/[^A-Za-z0-9+#]+/)) {
+      const token = raw.trim();
+      // The endpoint rejects anything shorter than three characters.
+      if (token.length < MIN_KEYWORD_LENGTH) continue;
+
+      const key = token.toLowerCase();
+      if (KEYWORD_STOPWORDS.has(key) || seen.has(key)) continue;
+
+      seen.add(key);
+      tokens.push(token);
+      if (tokens.length === MAX_SEARCH_TOKENS) return tokens;
+    }
+  }
+
+  return tokens;
+}
+
+/**
  * Search the framework for every keyword and pool the results.
  *
  * `sector` scopes the search: pass the user's sector to look inward, omit it
- * to look across the whole framework. Individual keyword failures are absorbed
- * — a partial pool is still a usable one.
+ * to look across the whole framework. Individual token failures are absorbed
+ * — a partial pool is still a usable one — but a total failure is reported, so
+ * a caller can tell "the framework has nothing for this person" apart from
+ * "every request failed".
  */
 export async function findRoles(
   keywords: string[],
   options: { sector?: string; pageSize?: number } = {},
-): Promise<{ roles: SsgJobRole[]; failures: number }> {
-  if (keywords.length === 0) return { roles: [], failures: 0 };
+): Promise<{ roles: SsgJobRole[]; failures: number; attempted: number }> {
+  const tokens = searchTokens(keywords);
+  if (tokens.length === 0) return { roles: [], failures: 0, attempted: 0 };
 
   // Fail fast rather than firing a fan-out of requests that will all 401.
   // Without this the error is absorbed by `gatherSettled` below and the agent
@@ -82,17 +139,17 @@ export async function findRoles(
   if (!hasSsgCredentials()) throw new SsgCredentialsError();
 
   const { results, failures } = await gatherSettled(
-    keywords.map(async (keyword) => {
+    tokens.map(async (keyword) => {
       const { jobRoles } = await searchJobRoles({
         keyword,
         sector: options.sector || undefined,
-        pageSize: options.pageSize ?? 10,
+        pageSize: options.pageSize ?? 20,
       });
       return jobRoles;
     }),
   );
 
-  return { roles: dedupeJobRoles(results), failures };
+  return { roles: dedupeJobRoles(results), failures, attempted: tokens.length };
 }
 
 /**

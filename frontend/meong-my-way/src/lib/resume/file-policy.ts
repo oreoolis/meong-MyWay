@@ -1,9 +1,7 @@
 /**
  * What counts as an acceptable resume upload.
  *
- * Deliberately separate from `lib/mock-agents.ts`'s `validateResumeFile`, which
- * stays as-is for the mocked demo path. This module is the policy the real
- * storage path enforces, and it is stricter in two ways:
+ * The single policy the storage path enforces. It is strict in two ways:
  *
  *  1. PDF and DOCX only. Legacy `.doc` is rejected — the parser pipeline can't
  *     read the old OLE2 binary format.
