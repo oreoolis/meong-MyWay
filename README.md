@@ -6,7 +6,7 @@
 
 <p align="center">
   Upload a resume once. Five Amazon Bedrock agents read it, plan around it, rewrite it,<br/>
-  and check it against live Singapore job-market data — so a career switch stops being a guess.
+  and check it against live Singapore job-market data, so a career switch stops being a guess.
 </p>
 
 ---
@@ -75,12 +75,12 @@
 
 ## Architecture Overview
 
-Everything is one Next.js app: pages and API routes ship from the same codebase, deployed as a single unit. There is no separate backend service — `src/app/api/*` route handlers are the server, calling AWS directly with the runtime's own credentials.
+Everything is one Next.js app: pages and API routes ship from the same codebase, deployed as a single unit. There is no separate backend service. The `src/app/api/*` route handlers are the server, calling AWS directly with the runtime's own credentials.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg" />
-    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture — browser, Next.js compute, and the Bedrock, S3, DynamoDB, Cognito and IAM services behind it" width="100%" />
+    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture: browser, Next.js compute, and the Bedrock, S3, DynamoDB, Cognito and IAM services behind it" width="100%" />
   </picture>
 </p>
 
@@ -88,7 +88,7 @@ Everything is one Next.js app: pages and API routes ship from the same codebase,
 
 ### The same thing as a flow graph
 
-Where the diagram above shows *what* is deployed, this shows *what calls what* — including the ordering rule the orchestrator enforces.
+Where the diagram above shows *what* is deployed, this shows *what calls what*, including the ordering rule the orchestrator enforces.
 
 ```mermaid
 graph TD
@@ -100,7 +100,7 @@ graph TD
         apiAuth["/api/auth/session<br/>verifies Cognito JWTs"]
         apiResume["/api/resume<br/>GET · POST · DELETE"]
         apiAnalysis["/api/analysis<br/>GET · POST"]
-        apiSwap["/api/analysis/swap<br/>POST — deferred agent 5"]
+        apiSwap["/api/analysis/swap<br/>POST · deferred agent 5"]
         orchestrator["Agent Orchestrator<br/>lib/agents/orchestrator.ts"]
     end
 
@@ -157,6 +157,64 @@ graph TD
 
 ---
 
+## Design decisions
+
+The binding constraint on this project is a **total inference budget under $20**. Most of what follows falls out of that, plus one rule: an ungrounded recommendation about someone's livelihood is worse than no recommendation.
+
+Full write-ups live in `docs/adr/`. The short version:
+
+| Decision | Why | What it costs |
+|---|---|---|
+| **One Next.js app, no separate backend** | Route handlers call AWS directly with the runtime's credentials. One deployment, one auth path, no service-to-service hop. | Long agent runs occupy a request, so `maxDuration` matters on serverless. |
+| **Bedrock Converse API, not `InvokeModel`** | Converse normalises the request across model families, so changing the model is an env change rather than a rewrite. That is what made the Nova to Claude switch a one-line diff. | Slightly thinner surface than a native model API. |
+| **Resume attached as a Converse `document` block** | Bedrock extracts PDF and DOCX server-side. There is no `pdf-parse` or `mammoth` in the tree, no parser to keep patched, no malformed-PDF crash path, and the bytes never reach a third party. | Extraction quality is the vendor's, not ours. |
+| **Titan Embeddings V2** | Already inside Bedrock: no second vendor, no warm inference endpoint, no extra credential to rotate. Self-hosted sentence-transformers is cheaper per call, but the saving is a rounding error against running the endpoint. | 1024 dimensions, requested normalised, which is what lets the matcher treat a dot product as cosine similarity. |
+| **Embed the parser's prose, not the raw extraction** | The parser emits an `embeddingText` summary and that is what gets vectorised, so page headers, footers and two-column artefacts never reach the vector. | One extra field the parser must produce. |
+| **Temperature 0 everywhere** | Career advice that changes between two runs of the same resume reads as guesswork. | A bad reply is deterministic, so retrying cannot fix it. This is why the token-ceiling error names itself instead of surfacing as a parse failure. |
+| **Ground truth from the Skills Framework, never the model** | Salary bands, sector names and role titles come from SSG-WSG and are joined back onto the model's commentary by role ID. A role the API never returned is dropped rather than displayed. | Two agents depend on an external API that can be down. See [How agents 4 and 5 handle a silent framework](#how-agents-4-and-5-handle-a-silent-framework). |
+| **Every agent passes an explicit `maxTokens`** | It is a per-agent cost ceiling, which is what makes a hard per-run bound computable at all. | A ceiling set too low truncates the reply. That happened. See the [token ceiling](#troubleshooting) entry. |
+
+### Why Claude Haiku 4.5 for reasoning
+
+The first version used `amazon.nova-lite-v1:0` at $0.06 / $0.24 per million tokens, purely on price ([ADR-0001](docs/adr/0001-cheapest-bedrock-model-that-still-reasons.md)). That ADR named the condition for reopening the decision: *users report the advice as generic*.
+
+The condition was met, in exactly the place it predicted. Run against a real resume, the Career Swapper returned what read as a list of adjacent job titles rather than an argument about *this* candidate. Nova Lite can name a plausible destination; it cannot hold a specific line of the resume in mind while justifying one. The swapper's own prompt already demanded "if they have never managed anyone, stakeholder management is not transferable for them", and the model could not honour it.
+
+That matters more here than anywhere else in the pipeline, because a career switch is the most consequential thing this app suggests.
+
+So the reasoning model is now `us.anthropic.claude-haiku-4-5-20251001-v1:0` at $1.00 / $5.00 per million ([ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md)). Roughly 19.6x the unit cost, and the budget still holds:
+
+| | Per run | Runs within $20 |
+|---|---|---|
+| Nova Lite | ~$0.0025 | ~8,000 |
+| Haiku 4.5, measured typical | ~$0.078 | ~256 |
+| Haiku 4.5, every agent at its ceiling | ~$0.174 | ~115 |
+
+The honest claim is not "it fits" but "it cannot exceed ~$0.17 per run, so the budget cannot be spent in fewer than ~115 analyses". For a project that has run in the low hundreds, that buys the one capability the product is sold on.
+
+Two consequences of the switch are easy to trip over:
+
+- **The runtime ID is an inference profile, not a foundation model.** Claude 4.x on Bedrock publishes `INFERENCE_PROFILE` as its only supported invocation type, so the bare ID returns a `ValidationException`. The `us.` prefix routes across us-east-1, us-east-2 and us-west-2.
+- **IAM gained a dimension.** A cross-region profile is authorised against the profile *and* against the foundation model in whichever region the request lands, so granting only the profile ARN produces an `AccessDeniedException` that looks intermittent because it depends on routing. `iac/bedrock.tf` expands both.
+
+### Why the model answers through a tool
+
+Every agent needs a typed JSON object back. Asking for JSON in prose and parsing it was the weak link, and it failed in production rather than in theory.
+
+One run against a real resume produced 19 correct `"evidence":` keys and one that came out as `process":`. Unparseable, and unrepairable. The reply was not truncated: `stopReason` was `end_turn` at 2,042 of 4,096 output tokens. Because temperature is pinned at 0, it recurred identically on every retry, so the user's run failed permanently with a 502.
+
+`lib/bedrock/reason.ts` now forces a single tool call. The model emits a structured argument against a declared schema and Bedrock hands back `toolUse.input` already decoded, so there is no fence to strip, no braces to count, and no way for a stray token to reach a parser. The prose path survives only as a fallback for a model or region that will not honour a forced tool call.
+
+The schema inside that tool is deliberately permissive. Each agent already normalises what it gets and pins its real shape in its own prompt; declaring five full JSON schemas here would duplicate that and then drift from it. What is wanted from the schema is well-formedness, not validation.
+
+### Why the normalisation code stays
+
+Every agent clamps confidences, defaults enum fields, and drops rewrites that do not quote the resume. ADR-0001 introduced this as "the tax for the price point", which made it look removable once the price point went up.
+
+It is not. The measured Haiku call still wrapped its JSON in a Markdown code fence, which is what `extractJson` exists to strip. The normalisation should be left alone until something demonstrates it is dead.
+
+---
+
 ## Key Flows
 
 ### Sign-in (Amazon Cognito via Amplify Auth)
@@ -182,13 +240,13 @@ sequenceDiagram
     FE->>API: POST /api/auth/session { idToken, accessToken }
     API->>Cognito: Verify signature, issuer, audience,<br/>token use, expiry, subject match (aws-jwt-verify)
     Cognito-->>API: Keys / JWKS
-    API-->>FE: 200 — session accepted
+    API-->>FE: 200, session accepted
     FE-->>User: Routed to Upload stage
 ```
 
-### Resume upload → five-agent analysis
+### Resume upload to five-agent analysis
 
-Note the split at the end: **agents 1–4 run in the POST the user waits on, agent 5 runs in a second request the results screen fires for itself.** Why is in [Latency](#latency--why-agent-5-runs-separately).
+Note the split at the end. **Agents 1 to 4 run in the POST the user waits on; agent 5 runs in a second request the results screen fires for itself.** Why: [Latency](#latency-why-agent-5-runs-separately).
 
 ```mermaid
 sequenceDiagram
@@ -212,47 +270,47 @@ sequenceDiagram
     ResumeAPI->>DDB_R: Put pointer + metadata (one row per user)
     ResumeAPI-->>FE: 201 stored
 
-    FE->>AnalysisAPI: POST /api/analysis (no body — resume looked up by caller's sub)
+    FE->>AnalysisAPI: POST /api/analysis (no body, resume looked up by caller's sub)
     AnalysisAPI->>Orc: runAnalysis(resume)
 
-    Orc->>Bedrock: Agent 1 — Parse + embed (Converse, native PDF/DOCX)
+    Orc->>Bedrock: Agent 1, parse + embed (Converse, native PDF/DOCX)
     Bedrock-->>Orc: ResumeProfile + embedding vector
     Orc->>DDB_A: Store profile + embedding (before handoff)
 
-    Orc->>Bedrock: Agent 2 — Career Planner (trajectory + paths)
+    Orc->>Bedrock: Agent 2, Career Planner (trajectory + paths)
     Bedrock-->>Orc: CareerPlan
-    Orc->>DDB_A: Store plan + routing (sector, keywords — agent 5 reads this back)
+    Orc->>DDB_A: Store plan + routing (sector, keywords, read back by agent 5)
 
-    par Agents 3–4 run concurrently
-        Orc->>Bedrock: Agent 3 — Resume Improver (quoted rewrites)
+    par Agents 3 and 4 run concurrently
+        Orc->>Bedrock: Agent 3, Resume Improver (quoted rewrites)
         Bedrock-->>Orc: ResumeImprovement
     and
-        Orc->>SSG: Agent 4 — Industry Advisor: search roles in current sector
+        Orc->>SSG: Agent 4, Industry Advisor: search roles in current sector
         SSG-->>Orc: Matched roles, salary bands
         Orc->>Bedrock: Score + rationalise matches
         Bedrock-->>Orc: IndustryAdvice
     end
 
-    Orc->>DDB_A: Store improver / advisor (allSettled — one failure ≠ all fail)
+    Orc->>DDB_A: Store improver / advisor (allSettled, one failure is not all fail)
     Orc-->>AnalysisAPI: AnalysisBundle (swap: null) + token cost
     AnalysisAPI-->>FE: 201 { analysis }
-    FE-->>User: Results fork — Advisor door ready, Transitioner door shows a progress bar
+    FE-->>User: Results fork. Advisor door ready, Transitioner door shows a progress bar
 
-    Note over FE,SwapAPI: Fired the moment the fork renders — the user reads<br/>while this runs, rather than waiting for it
+    Note over FE,SwapAPI: Fired the moment the fork renders, so the user reads<br/>while this runs rather than waiting for it
 
     FE->>SwapAPI: POST /api/analysis/swap (no body)
     SwapAPI->>Orc: runCareerSwap(userId)
     Orc->>DDB_A: Read back profile + embedding + routing
-    Orc->>SSG: Agent 5 — Career Swapper: search roles in adjacent sectors
+    Orc->>SSG: Agent 5, Career Swapper: search roles in adjacent sectors
     SSG-->>Orc: Candidate destinations
     Orc->>Bedrock: Score portable skills + gaps
     Bedrock-->>Orc: CareerSwap
     Orc->>DDB_A: Store swapper
-    SwapAPI-->>FE: 201 { swap, cost } — cost merged into the figure on screen
+    SwapAPI-->>FE: 201 { swap, cost }, cost merged into the figure on screen
     FE-->>User: Transitioner door unlocks, usually before it is clicked
 ```
 
-### AI Content Generation (per agent)
+### AI content generation (per agent)
 
 ```mermaid
 sequenceDiagram
@@ -261,17 +319,15 @@ sequenceDiagram
     participant Reason as "lib/bedrock/reason.ts"
     participant Bedrock as "Amazon Bedrock (Converse API)"
 
-    
     Creator->>Agent: parseResume(resume, bytes) / planCareers(profile) / ...
-    Agent->>Reason: reasonJson(prompt, schema hint)
+    Agent->>Reason: reasonJson(prompt, forced tool call)
     Reason->>Bedrock: Converse (document block or text, temperature 0)
-    Bedrock-->>Reason: Model reply (may be loosely-formatted JSON)
-    Reason->>Reason: Brace-scan for the JSON object, never trust a clean reply
-    Reason-->>Agent: Parsed JSON + token usage
+    Bedrock-->>Reason: toolUse.input, already decoded
+    Reason->>Reason: Check stopReason first, so a truncated reply is named not misparsed
+    Reason-->>Agent: Typed payload + token usage
     Agent->>Agent: Normalise, clamp confidences, default enums, drop rewrites that don't quote the resume
     Agent-->>Creator: Typed result (ResumeProfile / CareerPlan / ...) + usage
 ```
-
 
 ---
 
@@ -279,28 +335,28 @@ sequenceDiagram
 
 | # | Agent | File | Reads | Produces |
 |---|-------|------|-------|----------|
-| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes (Bedrock document block) | Structured `ResumeProfile` + a Titan embedding |
-| 2 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan` — current trajectory + ranked paths |
-| 3 | Resume Improver | `lib/agents/resume-improver.ts` | Profile + plan + original document | Quoted, line-level rewrites with impact ratings |
+| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes (Bedrock document block) | Structured `ResumeProfile` plus a Titan embedding |
+| 2 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan`: current trajectory and ranked paths |
+| 3 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | Quoted, line-level rewrites with impact ratings |
 | 4 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
 | 5 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations, portable skills, coach referrals |
 
-Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3 and 4 then fan out with `Promise.allSettled`, so one specialist failing (e.g. no SSG credentials) still returns a usable bundle. Agent 5 is deliberately outside that fan-out — see [Latency](#latency--why-agent-5-runs-separately). For why Claude Haiku 4.5 replaced Nova Lite as the reasoning model, and what it costs, see [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md).
+Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3 and 4 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 5 sits deliberately outside that fan-out.
 
-### Latency — why agent 5 runs separately
+### Latency: why agent 5 runs separately
 
-Measured end to end against a real résumé:
+Measured end to end against a real resume:
 
-| Phase | Duration |
-|---|---|
-| Resume Parser | 9.4s |
-| Career Planner | 24.9s |
-| Resume Improver ┐ | 12.0s |
-| Industry Advisor ┤ concurrent | 10.7s |
-| **Career Swapper** ┘ | **31.5s** |
-| **Total, all five in one request** | **69s** |
+| Phase | Concurrent | Duration |
+|---|---|---|
+| Resume Parser | | 9.4s |
+| Career Planner | | 24.9s |
+| Resume Improver | yes | 12.0s |
+| Industry Advisor | yes | 10.7s |
+| **Career Swapper** | yes | **31.5s** |
+| **Total, all five in one request** | | **69s** |
 
-The swapper set the wall clock on its own, and it is the one agent whose output the results screen does not show: that screen is a fork, and someone who picks *"further my career"* never opens the swapper's half. Every user was waiting ~20s for output half of them would not look at.
+The swapper set the wall clock on its own, and it is the one agent whose output the results screen does not show. That screen is a fork, and someone who picks *"further my career"* never opens the swapper's half. Every user was waiting about 20 extra seconds for output that half of them would not look at.
 
 So it moved to `POST /api/analysis/swap`, which the browser fires **when the fork renders** rather than when the Transitioner door is clicked. The work now overlaps with reading instead of with waiting, and is usually finished before the click arrives.
 
@@ -308,43 +364,27 @@ So it moved to `POST /api/analysis/swap`, which the browser fires **when the for
 |---|---|---|
 | First usable screen | 69s | **~50s** |
 | Transitioner click | instant | instant (prefetched) |
-| Cost | one bill | unchanged — the swap response returns its own `RunCost`, merged into the figure on screen |
+| Cost | one bill | unchanged; the swap response returns its own `RunCost`, merged into the figure on screen |
 
 Two consequences worth knowing:
 
 - **The planner's routing is persisted.** A second request has nothing in memory, so `sector` and `adjacentKeywords` are written to DynamoDB as a `routing` artifact and read back by `runCareerSwap`. That is what makes agent 5 relocatable at all.
-- **`swap: null` now means three different things** — not asked for yet, in flight, or failed. The browser tracks `SwapRequestState` separately, because those render as a progress bar, a progress bar, and a retry button respectively. Reading an absent `swap` as failure is what previously made the fork claim *"the career swapper could not be reached"* during every normal 30-second window.
+- **`swap: null` now means three different things:** not asked for yet, in flight, or failed. The browser tracks `SwapRequestState` separately, because those render as a progress bar, a progress bar, and a retry button respectively. Reading an absent `swap` as failure is what previously made the fork claim *"the career swapper could not be reached"* during every normal 30-second window.
 
 ### How agents 4 and 5 handle a silent framework
 
-The two market-facing agents depend on an external API that can return nothing —
-because a résumé genuinely has no published match, because credentials are
-unset, or because the endpoint rejected the query. Those look identical from
-inside the pipeline, and the first version treated all three the same way: the
-agent returned `null` and the UI said no matches were found. For someone who
-opened the Transitioner door specifically to ask "what else could I do?", that
-reads as *there is nowhere for you to go* — a claim the app had no basis to
-make.
+The two market-facing agents depend on an external API that can return nothing: because a resume genuinely has no published match, because credentials are unset, or because the endpoint rejected the query. Those look identical from inside the pipeline, and the first version treated all three the same way. The agent returned `null` and the UI said no matches were found. For someone who opened the Transitioner door specifically to ask "what else could I do?", that reads as *there is nowhere for you to go*, a claim the app had no basis to make.
 
 So each of them now runs in two tiers, and reports which one answered:
 
 | `basis` | Source | Salary bands |
 |---|---|---|
-| `framework` | Real Skills Framework roles, re-ranked against the résumé embedding | The framework's published monthly figures |
+| `framework` | Real Skills Framework roles, re-ranked against the resume embedding | The framework's published monthly figures |
 | `reasoned` | The model's own account of the Singapore market | Estimates, labelled as such in the UI |
 
-The grounded tier is always tried first and is strongly preferred — it is the
-reason the Skills Framework is wired in at all. The reasoning tier exists so
-that an API outage costs the user some precision rather than their entire
-answer. The distinction reaches the browser because it changes how much weight
-a reader should give a number, and the two are indistinguishable in the cards
-themselves.
+The grounded tier is always tried first and is strongly preferred, since it is the reason the Skills Framework is wired in at all. The reasoning tier exists so that an API outage costs the user some precision rather than their entire answer. The distinction reaches the browser because it changes how much weight a reader should give a number, and the two are otherwise indistinguishable in the cards.
 
-Both tiers end the Transitioner branch with **real, publicly funded career
-coaching services** (`lib/agents/coaches.ts`). That list is a verified constant,
-never model output — a hallucinated agency or dead link is the one failure here
-whose cost lands outside the browser. The model only writes *what to ask* once
-the user gets there, tailored to the destinations it just produced.
+Both tiers end the Transitioner branch with **real, publicly funded career coaching services** (`lib/agents/coaches.ts`). That list is a verified constant, never model output, because a hallucinated agency or dead link is the one failure here whose cost lands outside the browser. The model only writes *what to ask* once the user gets there, tailored to the destinations it just produced.
 
 ---
 
@@ -352,36 +392,36 @@ the user gets there, tailored to the destinations it just produced.
 
 The whole app is a **single route** (`/`); every phase is a state of the `<Workspace/>` component.
 
-1. **Landing** — value proposition, no auth required.
-2. **Sign in** — Amazon Cognito through Amplify Auth: email/password sign-up, emailed confirmation code, SRP login, optional TOTP MFA. See [`docs/auth/cognito.md`](docs/auth/cognito.md).
-3. **Upload** — drag-and-drop or browse for a PDF/DOCX (≤5 MB). Validated twice: once on declared name/size/type, once by sniffing the actual file bytes server-side so a renamed file can't slip through.
-4. **Analysis** — a live trace draws the real fan-out: one card per agent, each with its own progress bar and step list. The Career Swapper's card reads **Queued** throughout, because it genuinely has not started — it is not part of this request.
-5. **Results fork** — two doors:
-   - **Advisor** — stay in your current industry: the plan, the resume rewrites, and roles matched inside your sector.
-   - **Transitioner** — switch industries: pivot destinations, portable skills, what's missing to get there, and where to speak to a real career coach about it.
+1. **Landing.** Value proposition, no auth required.
+2. **Sign in.** Amazon Cognito through Amplify Auth: email/password sign-up, emailed confirmation code, SRP login, optional TOTP MFA. See [`docs/auth/cognito.md`](docs/auth/cognito.md).
+3. **Upload.** Drag-and-drop or browse for a PDF/DOCX (≤5 MB). Validated twice: once on declared name/size/type, once by sniffing the actual file bytes server-side so a renamed file cannot slip through.
+4. **Analysis.** A live trace draws the real fan-out: one card per agent, each with its own progress bar and step list. The Career Swapper's card reads **Queued** throughout, because it genuinely has not started.
+5. **Results fork.** Two doors:
+   - **Advisor.** Stay in your current industry: the plan, the resume rewrites, and roles matched inside your sector.
+   - **Transitioner.** Switch industries: pivot destinations, portable skills, what is missing to get there, and where to speak to a real career coach about it.
 
    The Transitioner door carries a progress bar while agent 5 runs behind it, then unlocks. A door with no data is disabled rather than hidden, and says which of the three reasons applies: still working, found nothing, or could not be reached (with a retry).
 
-### Presenting paths — one comparison, not a stack of cards
+### Presenting paths: one comparison, not a stack of cards
 
-Both branches render their paths through `ComparePaths` (`components/ui/compare-paths.tsx`): a tab strip across the destinations, and beneath it a table whose rows are fixed — *the role · why you · what carries over · what's missing · time and pay · the route*.
+Both branches render their paths through `ComparePaths` (`components/ui/compare-paths.tsx`): a tab strip across the destinations, and beneath it a table whose rows are fixed at *the role · why you · what carries over · what's missing · time and pay · the route*.
 
-It replaced a column of expandable cards, which put four destinations × seven sections on one page and asked the reader to hold the differences in their head. A stable frame is what lets someone diff two options: switching tabs changes the answers, never the questions. The left column is the reader's own résumé, so each row reads as a delta — and where a résumé genuinely cannot answer a row (nobody's CV states the salary of a job they have not taken) the row says so instead of inventing a baseline.
+It replaced a column of expandable cards, which put four destinations across seven sections on one page and asked the reader to hold the differences in their head. A stable frame is what lets someone diff two options: switching tabs changes the answers, never the questions. The left column is the reader's own resume, so each row reads as a delta. Where a resume genuinely cannot answer a row (nobody's CV states the salary of a job they have not taken) the row says so instead of inventing a baseline.
 
-The tab strip is hand-rolled rather than pulled from a component library: this project has no Radix, and adding it for one control would bring a second styling vocabulary. The keyboard contract is the part that matters and is implemented in full — arrow keys move between tabs, Home/End jump to the ends, and only the selected tab is in the page's tab order.
+The tab strip is hand-rolled rather than pulled from a component library, because this project has no Radix and adding it for one control would bring a second styling vocabulary with it. The keyboard contract is the part that matters and is implemented in full: arrow keys move between tabs, Home and End jump to the ends, and only the selected tab is in the page's tab order.
 
 ### Progress that does not lie
 
 Two different bars, because two different things are known.
 
-**Agent cards** derive from real state: `done / total` steps, with a running step counting **half**. Half is not a claim about the step's internals — nothing reports those — it is what stops the bar freezing for a whole step and then jumping a third at once.
+**Agent cards** derive from real state: `done / total` steps, with a running step counting **half**. Half is not a claim about the step's internals, since nothing reports those. It is what stops the bar freezing for a whole step and then jumping a third at once.
 
 **The career swapper** is a single round trip that reports nothing between "started" and "finished", so `useEstimatedProgress` projects from the measured ~32s (`lib/agents/timings.ts`). Two rules keep the projection honest:
 
 1. **It cannot reach 100 on its own.** The curve eases to 92%, then creeps toward 98% and stops. 100 is *derived* from the request completing, so there is no state where the bar is full but the work is not. A bar that fills and then sits there has stated something false, which is strictly worse than no bar.
-2. **Overrun stays visible.** Past the estimate it keeps inching rather than freezing, so a slow run looks slow — and the words beside it say "usually about 30 seconds", because the bar is the shape of the wait and the sentence is the claim about it.
+2. **Overrun stays visible.** Past the estimate it keeps inching rather than freezing, so a slow run looks slow. The words beside it say "usually about 30 seconds", because the bar is the shape of the wait and the sentence is the claim about it.
 
-The transitioner page also narrates the swapper's three real phases (search sectors → score against the résumé → write up the routes). Those are advanced **on a timer, not by events**: if the agent stalls in phase one, the display still walks to phase three. That is a real limitation of having no progress channel, and it is noted in the code rather than papered over.
+The transitioner page also narrates the swapper's three real phases: search sectors, score against the resume, write up the routes. Those are advanced **on a timer, not by events**, so if the agent stalls in phase one the display still walks to phase three. That is a real limitation of having no progress channel, and it is noted in the code rather than papered over.
 
 ---
 
@@ -391,15 +431,15 @@ The transitioner page also narrates the swapper's three real phases (search sect
 |------|-------------|-------|
 | ![Node.js](https://img.shields.io/badge/Node.js-20.9%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white) | 20.9 (22.x recommended) | Frontend dev server |
 | npm | 10+ | Ships with Node |
-| AWS account | — | Bedrock model access, Cognito user pool, S3, DynamoDB — no local emulation |
-| Terraform | 1.x | Only needed to provision/modify `iac/` |
-| SSG-WSG credentials | — | Optional — powers the Industry Advisor & Career Swapper agents |
+| AWS account | any | Bedrock model access, Cognito user pool, S3, DynamoDB. No local emulation |
+| Terraform | 1.x | Only needed to provision or modify `iac/` |
+| SSG-WSG credentials | optional | Powers the Industry Advisor and Career Swapper agents |
 
 ---
 
 ## Environment Setup
 
-### 1 — Provision AWS infrastructure (optional if it already exists)
+### 1. Provision AWS infrastructure (optional if it already exists)
 
 ```bash
 cd iac
@@ -408,24 +448,24 @@ terraform plan
 terraform apply
 ```
 
-This creates the S3 uploads bucket, the `{project}-resumes` and `{project}-analyses` DynamoDB tables, and resolves the two Bedrock model IDs. `terraform output` gives you every value the frontend `.env.local` needs. `create_iam` is off by default (the dev sandbox restricts IAM writes) — flip it on when deploying somewhere with a real execution role. CI applies this automatically via `.github/workflows/deplopy-infra.yml` on pushes to `iac/**`.
+This creates the S3 uploads bucket, the `{project}-resumes` and `{project}-analyses` DynamoDB tables, and resolves the two Bedrock model IDs. `terraform output` gives you every value the frontend `.env.local` needs. `create_iam` is off by default because the dev sandbox restricts IAM writes; flip it on when deploying somewhere with a real execution role. CI applies this automatically via `.github/workflows/deplopy-infra.yml` on pushes to `iac/**`.
 
-Enable model access once per account, in the Bedrock console → **Model access**, for `anthropic.claude-haiku-4-5-20251001-v1:0` and `amazon.titan-embed-text-v2:0`.
+Enable model access once per account, in the Bedrock console under **Model access**, for `anthropic.claude-haiku-4-5-20251001-v1:0` and `amazon.titan-embed-text-v2:0`.
 
 Haiku 4.5 is invoked through a cross-region inference profile, so the ID the app uses carries a `us.` prefix that the console does not show. Take it from `terraform output bedrock_reasoning_model_id` rather than typing it.
 
-### 2 — Create a Cognito user pool
+### 2. Create a Cognito user pool
 
-Application code expects an existing pool and does not provision one. Follow [`docs/auth/cognito.md`](docs/auth/cognito.md) — email as username, SRP-only public app client (no secret), TOTP MFA, refresh-token rotation.
+Application code expects an existing pool and does not provision one. Follow [`docs/auth/cognito.md`](docs/auth/cognito.md): email as username, SRP-only public app client (no secret), TOTP MFA, refresh-token rotation.
 
-### 3 — (Optional) Get SSG-WSG credentials
+### 3. (Optional) Get SSG-WSG credentials
 
-Register at [developer.swda.gov.sg](https://developer.swda.gov.sg) → your app → Credentials, for `SSG_CLIENT_ID` / `SSG_CLIENT_SECRET`. Without these the Industry Advisor and Career Swapper agents are skipped; the parser, planner, and improver still run.
+Register at [developer.swda.gov.sg](https://developer.swda.gov.sg), then your app, then Credentials, for `SSG_CLIENT_ID` and `SSG_CLIENT_SECRET`. Without these the Industry Advisor and Career Swapper agents fall back to their reasoned tier; the parser, planner, and improver are unaffected.
 
-### 4 — `frontend/meong-my-way/.env.local`
+### 4. `frontend/meong-my-way/.env.local`
 
 ```dotenv
-# Public Cognito identifiers — bundled into the browser, not secrets themselves.
+# Public Cognito identifiers. Bundled into the browser, not secrets themselves.
 NEXT_PUBLIC_COGNITO_USER_POOL_ID=ap-southeast-1_xxxxxxxxx
 NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 
@@ -479,9 +519,11 @@ Then open **http://localhost:3000**. Restart the dev server after changing any `
 | `npm run build` | Production build |
 | `npm run start` | Serve the production build |
 | `npm run lint` | ESLint |
-| `npm run test` | Vitest — unit project |
-| `npm run test:watch` | Vitest — unit project, watch mode |
-| `npm run test:integration` | Vitest — integration project (hits real Bedrock/AWS where configured) |
+| `npm run test` | Vitest, unit project |
+| `npm run test:watch` | Vitest, unit project, watch mode |
+| `npm run test:integration` | Vitest, integration project (hits real Bedrock/AWS where configured) |
+
+The integration suite prints its own per-agent timings and per-run cost on every run, which is where the figures in this README come from.
 
 ---
 
@@ -490,7 +532,7 @@ Then open **http://localhost:3000**. Restart the dev server after changing any `
 | Service | Badge | URL |
 |---------|-------|-----|
 | Frontend + API routes | ![Next.js](https://img.shields.io/badge/Next.js-App_%2B_API-000000?style=flat-square&logo=nextdotjs&logoColor=white) | http://localhost:3000 |
-| Cognito, Bedrock, S3, DynamoDB, SSG-WSG | — | External AWS / govt services — no local host port |
+| Cognito, Bedrock, S3, DynamoDB, SSG-WSG | none | External AWS and government services, no local host port |
 
 ---
 
@@ -502,13 +544,13 @@ frontend/meong-my-way/src/
 │   ├── api/
 │   │   ├── auth/session/route.ts   # verifies Cognito JWTs server-side
 │   │   ├── resume/route.ts         # GET/POST/DELETE the caller's stored resume
-│   │   ├── analysis/route.ts       # GET last run / POST to run agents 1–4
-│   │   └── analysis/swap/route.ts  # POST — agent 5, deferred and prefetched
+│   │   ├── analysis/route.ts       # GET last run / POST to run agents 1 to 4
+│   │   └── analysis/swap/route.ts  # POST agent 5, deferred and prefetched
 │   ├── globals.css                 # design tokens (light/dark), Tailwind v4 config
 │   ├── layout.tsx
 │   └── page.tsx                    # renders <Workspace/>
 ├── components/
-│   ├── workspace.tsx                # the stage machine — all pipeline state lives here
+│   ├── workspace.tsx                # the stage machine, all pipeline state lives here
 │   ├── app-header.tsx               # header + progress stepper
 │   ├── stages/                      # one component per phase of the flow
 │   │   ├── landing-stage.tsx
@@ -521,7 +563,7 @@ frontend/meong-my-way/src/
 │   └── ui/                          # primitives (incl. Meter + ProgressBar), icons,
 │                                    # stepper, agent trace, compare-paths
 └── lib/
-    ├── contracts.ts       # shared types — the agent/API contract
+    ├── contracts.ts       # shared types, the agent/API contract
     ├── use-estimated-progress.ts  # projected progress for work that reports none
     ├── agents/            # the 5 agents + orchestrator + cost estimator
     │                       # + coaches.ts: verified career services, not model output
@@ -529,23 +571,23 @@ frontend/meong-my-way/src/
     ├── bedrock/           # Converse wrapper (reason.ts) + embeddings.ts
     ├── ssg/                # SSG-WSG API client + OAuth token cache
     ├── resume/             # upload validation, S3/DynamoDB store, client, pipeline
-    ├── analysis/           # browser-side client for /api/analysis + /swap
+    ├── analysis/           # browser-side client for /api/analysis and /swap
     ├── auth/               # Amplify client wrapper, server-side JWT verification, route guard
     └── aws/clients.ts      # shared Bedrock/DynamoDB/S3 SDK clients
 ```
 
 ### Styling
 
-Tailwind v4, configured entirely in `src/app/globals.css` — there is no `tailwind.config.js`. Colors are CSS custom properties on `:root`, mapped to utilities through `@theme inline`, so `bg-surface`, `text-ink-2`, `border-hairline` and friends resolve in both light and dark mode. Dark mode follows the OS setting and also honours an explicit `data-theme="dark"` stamp on `<html>`.
+Tailwind v4, configured entirely in `src/app/globals.css`. There is no `tailwind.config.js`. Colors are CSS custom properties on `:root`, mapped to utilities through `@theme inline`, so `bg-surface`, `text-ink-2`, `border-hairline` and friends resolve in both light and dark mode. Dark mode follows the OS setting and also honours an explicit `data-theme="dark"` stamp on `<html>`.
 
 ---
 
-## Security — keeping credentials out of the repo and the bundle
+## Security: keeping credentials out of the repo and the bundle
 
 Two different leaks are possible here, so CI checks for both.
 [`.github/workflows/secret-scan.yml`](.github/workflows/secret-scan.yml) runs on
 every push and pull request, needs no repository secrets of its own (so it works
-on forks), and also runs weekly — history does not change, but gitleaks' rules
+on forks), and also runs weekly. History does not change, but gitleaks' rules
 do, so a credential format that had no rule when it was committed gets caught later.
 
 | Job | Asks | How |
@@ -564,7 +606,7 @@ named like a credential.
 
 The bundle-canary job is deliberately narrow in scope, and it is worth knowing why.
 Next.js does **not** inline a non-`NEXT_PUBLIC_` variable into the client bundle even
-when a client component reads it directly — that was measured against this app, which
+when a client component reads it directly. That was measured against this app, which
 is why the naming check above is the primary control. What the canary job catches is
 the config-level leak no naming rule can see: an `env` block in `next.config.ts`, a
 DefinePlugin, or any future bundler change that starts inlining server values.
@@ -572,11 +614,11 @@ DefinePlugin, or any future bundler change that starts inlining server values.
 ### False positives
 
 `.gitleaks.toml` allowlists exactly two things, each scoped to a rule *and* a path
-rather than a bare path — the AWS SDK's `Key:` object-path parameter in TS/JS
+rather than a bare path: the AWS SDK's `Key:` object-path parameter in TS/JS
 (a hardcoded `Key: "sk_live_..."` literal still fails), and `.terraform.lock.hcl`,
 which is committed on purpose and is entirely checksums.
 
-`.env.example` is deliberately **not** allowlisted: it is the file most likely to
+`.env.example` is deliberately **not** allowlisted. It is the file most likely to
 receive a real credential pasted in by accident, so it is scanned harder than the
 rest of the tree, not less.
 
@@ -592,46 +634,46 @@ consider `git filter-repo`.
 ## Troubleshooting
 
 **Frontend shows "Sign in is not configured"**
-Cognito user pool ID/client ID are missing or wrong in `.env.local`. Verify the pool exists and the app client is public (no secret) per `docs/auth/cognito.md`.
+Cognito user pool ID or client ID is missing or wrong in `.env.local`. Verify the pool exists and the app client is public (no secret) per `docs/auth/cognito.md`.
 
 **Resume upload returns 503 "Resume storage is not configured yet"**
-`AWS_REGION`, `S3_BUCKET_NAME`, or `DYNAMODB_RESUMES_TABLE` is missing/misnamed. Re-run `terraform output` in `iac/` and copy the values exactly.
+`AWS_REGION`, `S3_BUCKET_NAME`, or `DYNAMODB_RESUMES_TABLE` is missing or misnamed. Re-run `terraform output` in `iac/` and copy the values exactly.
 
 **`POST /api/analysis` returns 502 with `retryable: true`**
-A Bedrock call failed (throttling or a malformed model reply) — this is `AgentReasoningError` from `lib/bedrock/reason.ts`; retrying usually succeeds. Check the model is enabled under Bedrock → Model access. `POST /api/analysis/swap` answers the same way, and the Transitioner branch renders its own retry button for it.
+A Bedrock call failed, usually throttling or a malformed model reply. This is `AgentReasoningError` from `lib/bedrock/reason.ts`, and retrying usually succeeds. Check the model is enabled under Bedrock, Model access. `POST /api/analysis/swap` answers the same way, and the Transitioner branch renders its own retry button for it.
 
 **Any AWS call fails with `ExpiredTokenException` (403)**
-Temporary `ASIA…` session credentials in `.env.local` have aged out — common with lab/sandbox accounts. Re-authenticate (`aws sso login`, or restart the lab session and re-export) and restart the dev server. Nothing in the app is wrong; every AWS call fails at once, which is the tell.
+Temporary `ASIA…` session credentials have aged out, which is common with lab and sandbox accounts. Re-authenticate (`aws sso login`, or restart the lab session and re-export) and restart the dev server. Nothing in the app is wrong. Every AWS call failing at once is the tell.
+
+**An agent fails with "hit its token ceiling before finishing"**
+`AgentReasoningError` raised by `lib/bedrock/reason.ts` when Bedrock returns `stopReason: "max_tokens"`. The reply was cut off mid-object, so it is named rather than left to surface as a confusing parse error. The fix is the agent's `maxTokens`, not a retry: temperature is 0, so the same run fails identically every time.
+
+This bit the Career Swapper at the original 4096. Measured, its reasoned tier needs **5,227 to 6,293 output tokens** to emit four destinations with rationales, gaps, milestones and a coach brief, so both its tiers now run at 8192 (`DESTINATION_CEILING` in `career-swapper.ts`). The roughly 1,000-token spread between two similar resumes is why the ceiling has headroom rather than sitting just above the first measurement: the cost tracks how much the resume gives the model to work with.
+
+Raising any agent's ceiling invalidates the budget arithmetic in [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md). The per-run bound is now **$0.174** worst case against a measured typical of **~$0.078**, and `orchestrator.itest.ts` asserts it. Note that the bound counts the advisor and swapper **twice**: both run a grounded tier and fall back to a reasoned one, and a grounded call that returns no valid role ID has already been paid for when the reasoned call fires.
 
 **Results say the destinations are "reasoned" rather than drawn from the framework**
-Expected when the Skills Framework returns nothing, but worth checking if it happens on every run. Usually `SSG_CLIENT_ID` / `SSG_CLIENT_SECRET` are unset or were rejected: the seven endpoints are published as "Authentication: Open" but answer 401 without a bearer token. The server logs `[swapper] ... falling back` / `[advisor] ... falling back` with the cause. Set `SSG_API_BASE_URL=https://mock-public-api.ssg-wsg.sg` to develop against canned data.
+Expected when the Skills Framework returns nothing, but worth checking if it happens on every run. Usually `SSG_CLIENT_ID` and `SSG_CLIENT_SECRET` are unset or were rejected: the seven endpoints are published as "Authentication: Open" but answer 401 without a bearer token. The server logs `[swapper] ... falling back` or `[advisor] ... falling back` with the cause. Set `SSG_API_BASE_URL=https://mock-public-api.ssg-wsg.sg` to develop against canned data.
 
 **The Skills Framework returns no roles for keywords that obviously exist**
 The API answers **HTTP 200 for its failures** and carries the real outcome in the response envelope (`{ data: {}, error: {...}, status: 404 }`), so a rejected query is easy to mistake for an empty market. `lib/ssg/client.ts` inspects that inner status and throws. Two undocumented constraints it enforces, both established against the live host and pinned by `lib/ssg/client.itest.ts`:
 
-- **Never send `sortDirection`.** Any value — including the `asc` the API reports as its own default — makes `/jobRoles` answer `status: 404`. `sortby` is accepted but inert; results are title-ascending regardless, which is why ranking is done locally against the résumé embedding.
+- **Never send `sortDirection`.** Any value, including the `asc` the API reports as its own default, makes `/jobRoles` answer `status: 404`. `sortby` is accepted but inert; results are title-ascending regardless, which is why ranking is done locally against the resume embedding.
 - **`keyword` must be a single word.** A keyword containing a space answers `status: 500`, so `"Data Analyst"` returns nothing while `"Analyst"` returns 33 roles *including* Data Analyst. The planner emits real job titles, so `lib/agents/role-matching.ts` splits them into tokens before searching and lets the embedding re-rank the wider pool.
 
 Two response shapes are also normalised on the way in: `descriptions` is documented as a list but sent as a bare string, and salary figures arrive as decimal strings (`"3796.0"`). Both are converted in `normaliseJobRole`.
 
 **`sector=` filtering silently matches nothing**
-The filter takes a sector's numeric `id` from `listSectors` (e.g. `15614`), not its `code` (`ACC`). The code is accepted and returns zero results rather than an error.
+The filter takes a sector's numeric `id` from `listSectors` (for example `15614`), not its `code` (`ACC`). The code is accepted and returns zero results rather than an error.
 
 **`terraform apply` fails on IAM resources**
 `create_iam` defaults to `false` because the dev sandbox account restricts IAM writes. Leave it off for local development; the app runs on your own AWS CLI credentials instead of a task role.
 
 **Bedrock returns `ValidationException: Invocation of model ID ... with on-demand throughput isn't supported`**
-`BEDROCK_REASONING_MODEL_ID` is set to the bare foundation-model ID. Claude 4.x on Bedrock is inference-profile-only — the ID needs its geography prefix (`us.anthropic.claude-haiku-4-5-20251001-v1:0`). Take it from `terraform output bedrock_reasoning_model_id`; the Bedrock console shows the unprefixed ID, which is the one that fails.
+`BEDROCK_REASONING_MODEL_ID` is set to the bare foundation-model ID. Claude 4.x on Bedrock is inference-profile-only, so the ID needs its geography prefix (`us.anthropic.claude-haiku-4-5-20251001-v1:0`). Take it from `terraform output bedrock_reasoning_model_id`. The Bedrock console shows the unprefixed ID, which is the one that fails.
 
 **Bedrock returns `AccessDeniedException` intermittently**
 A cross-region inference profile is authorised against the profile *and* against the foundation model in whichever region it routed to, so a policy granting only one of them fails on some requests and not others. `iac/bedrock.tf` expands both, reading the region list from the profile itself.
 
-**Analysis takes a long time / times out on serverless**
-Sequential-then-parallel model calls plus SSG lookups run long — about **50s** for agents 1–4, then **~32s** more for agent 5 in its own request. `maxDuration = 300` is set on both routes, but some platforms (e.g. Vercel Hobby) cap function duration lower regardless; the client already treats a timeout as retryable. If you need the first screen sooner, the remaining lever is the planner (24.9s, and it blocks everything downstream).
-
-**An agent fails with "hit its token ceiling before finishing"**
-`AgentReasoningError` raised by `lib/bedrock/reason.ts` when Bedrock returns `stopReason: "max_tokens"` — the reply was cut off mid-object, so it is named rather than left to surface as a confusing parse error. The fix is the agent's `maxTokens`, not a retry: temperature is 0, so the same run fails identically every time.
-
-This bit the Career Swapper at the original 4096. Measured, its reasoned tier needs **5,227–6,293 output tokens** to emit four destinations with rationales, gaps, milestones and a coach brief, so both its tiers now run at 8192 (`DESTINATION_CEILING` in `career-swapper.ts`). The ~1,000-token spread between two similar résumés is why the ceiling has headroom rather than sitting just above the first measurement: the cost tracks how much the résumé gives the model to work with.
-
-Raising any agent's ceiling invalidates the budget arithmetic in [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md) — the per-run bound is now **$0.174** worst case against a measured typical of **~$0.078**, and `orchestrator.itest.ts` asserts it. Note that bound counts the advisor and swapper **twice**: both run a grounded tier and fall back to a reasoned one, and a grounded call that returns no valid role ID has already been paid for when the reasoned call fires.
+**Analysis takes a long time or times out on serverless**
+Sequential-then-parallel model calls plus SSG lookups run long: about **50s** for agents 1 to 4, then **~32s** more for agent 5 in its own request. `maxDuration = 300` is set on both routes, but some platforms (Vercel Hobby, for one) cap function duration lower regardless, and the client already treats a timeout as retryable. If you need the first screen sooner, the remaining lever is the planner at 24.9s, which blocks everything downstream.
