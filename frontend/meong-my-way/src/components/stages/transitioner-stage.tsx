@@ -1,5 +1,15 @@
 "use client";
 
+import {
+  ClipboardCheck,
+  Compass,
+  Layers,
+  MessageCircleQuestion,
+  MessagesSquare,
+} from "lucide-react";
+import { CareerTabs } from "@/components/ui/career-tabs";
+import styles from "@/components/ui/career-workspace.module.css";
+
 import type {
   AnalysisBundle,
   CareerCoach,
@@ -59,21 +69,15 @@ function BasisNote({ swap }: { swap: CareerSwap }) {
 
   return (
     <p className="mt-8 border-t border-hairline pt-5 text-[12px] leading-relaxed text-ink-muted">
-      The Skills Framework returned no published roles to match against for this
-      resume, so these destinations come from the model&apos;s reasoning about
-      the Singapore market rather than from the framework&apos;s catalogue.{" "}
-      <span className="text-ink-2">
-        Treat the salary bands as estimates, not published figures.
-      </span>{" "}
-      The directions are still worth taking to a coach below — confirming a band
-      is exactly the kind of thing they can do.
+      These destinations and salary bands are model estimates, not published
+      Skills Framework figures. Use the Talk to a coach tab to discuss your options.
     </p>
   );
 }
 
 function CoachCard({ coach }: { coach: CareerCoach }) {
   return (
-    <li className="rounded-xl border border-hairline bg-surface p-5">
+    <li className="flex flex-col rounded-xl border border-hairline bg-surface p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <p className="text-[14.5px] font-semibold tracking-tight text-ink">
           {coach.organisation}
@@ -95,11 +99,11 @@ function CoachCard({ coach }: { coach: CareerCoach }) {
         href={coach.url}
         target="_blank"
         rel="noreferrer noopener"
-        className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-medium text-accent transition-opacity hover:opacity-80"
+        className="mt-auto inline-flex min-h-11 items-center gap-1.5 pt-4 text-[13px] font-medium text-accent transition-opacity hover:opacity-80"
       >
         Book or find contact details
         <span aria-hidden="true">&rarr;</span>
-        <span className="sr-only">(opens in a new tab)</span>
+        <span className="sr-only"> for {coach.organisation} (opens in a new tab)</span>
       </a>
     </li>
   );
@@ -116,43 +120,46 @@ function TalkToSomeone({ swap }: { swap: CareerSwap }) {
   if (swap.coaches.length === 0) return null;
 
   return (
-    <section className="mt-10 border-t border-hairline pt-8">
+    <section className="mt-8">
       <SectionLabel>Talk it through with a person</SectionLabel>
       <h2 className="mt-2 text-[19px] font-semibold tracking-tight text-ink">
         Career coaches who can take this further
       </h2>
       <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
-        All four are publicly funded and free to Singapore citizens and PRs. A
-        coach can do the things this page cannot: confirm who is actually hiring,
-        tell you what a course costs after subsidy, and put you into a conversion
-        programme if one fits.
+        Find support with hiring, course subsidies, and conversion programmes.
       </p>
 
       {swap.coachBrief ? (
-        <Card className="mt-6 p-5">
-          <SectionLabel>What to bring to the session</SectionLabel>
-
-          {swap.coachBrief.summary ? (
-            <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
-              {swap.coachBrief.summary}
-            </p>
-          ) : null}
+        <section className={styles.sessionBrief}>
+          <div className={styles.sessionBriefHeader}>
+            <span className={styles.sessionBriefIcon} aria-hidden="true">
+              <ClipboardCheck />
+            </span>
+            <div>
+              <SectionLabel>Session prep</SectionLabel>
+              <h3>What to bring to the session</h3>
+              {swap.coachBrief.summary ? (
+                <p>{swap.coachBrief.summary}</p>
+              ) : null}
+            </div>
+          </div>
 
           {swap.coachBrief.questions.length > 0 ? (
-            <ul className="mt-3.5 space-y-2.5">
-              {swap.coachBrief.questions.map((question, i) => (
-                <li key={question} className="flex gap-3">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-wash text-[11px] font-semibold text-ink">
-                    {i + 1}
-                  </span>
-                  <p className="max-w-prose text-[13.5px] leading-relaxed text-ink-2">
-                    {question}
-                  </p>
-                </li>
-              ))}
-            </ul>
+            <div className={styles.sessionQuestions}>
+              <p className={styles.sessionQuestionsLabel}>Questions worth asking</p>
+              <ul>
+                {swap.coachBrief.questions.map((question) => (
+                  <li key={question}>
+                    <span aria-hidden="true">
+                      <MessageCircleQuestion />
+                    </span>
+                    <p>{question}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
-        </Card>
+        </section>
       ) : null}
 
       <ul className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -205,9 +212,7 @@ function SwapProgress() {
         Looking for sectors you could move into
       </p>
       <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
-        This agent runs on its own after the rest of the analysis, because it is
-        the slowest of the five and only one of the two branches needs it.
-        Everything else about your results is already saved.
+        Matching your experience to new sectors. Your other results are saved.
       </p>
 
       <ProgressBar
@@ -288,7 +293,7 @@ function SwapPending({
     return (
       <Card className="mt-8 p-6">
         <p className="text-[14px] font-medium text-ink">
-          The career swapper could not be reached
+          We couldn’t load your career options
         </p>
         <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
           This is a failure on our side rather than a verdict on your resume.
@@ -296,7 +301,7 @@ function SwapPending({
           already saved.
         </p>
         <Button variant="secondary" size="sm" className="mt-4" onClick={onRetry}>
-          Try the swapper again
+          Try again
         </Button>
       </Card>
     );
@@ -334,10 +339,10 @@ export function TransitionerStage({
   const { swap, profile } = analysis;
 
   return (
-    <div className="mw-rise mx-auto w-full max-w-4xl">
+    <div className={cn(styles.workspace, "mw-rise mx-auto w-full max-w-6xl")}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <SectionLabel>Career transitioner</SectionLabel>
+          <SectionLabel>Career transition</SectionLabel>
           <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
             Where {profile.candidateName.split(" ")[0]} could go next
           </h1>
@@ -363,6 +368,26 @@ export function TransitionerStage({
         </>
       ) : (
         <>
+          <CareerTabs label="Career transition sections" tabs={[
+            { id: "destinations", label: "Explore sectors", icon: <Compass />, content: <>
+          <section className="mt-9">
+            <h2 className="text-[19px] font-semibold tracking-tight text-ink">
+              {swap.destinations.length} sectors within reach
+            </h2>
+            <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
+              Start with your strongest fit. Explore the skills and steps for each move.
+            </p>
+
+            <div className="mt-5">
+              <ComparePaths paths={swap.destinations} profile={profile} />
+            </div>
+          </section>
+
+          <BasisNote swap={swap} />
+
+          </> },
+          { id: "skills", label: "Your skills", icon: <Layers />, content: <>
+            <h2 className="text-xl font-semibold">Take your experience with you</h2>
           {swap.note ? (
             <p className="mt-5 max-w-prose text-[14px] leading-relaxed text-ink-2">
               {swap.note}
@@ -373,7 +398,7 @@ export function TransitionerStage({
             <Card className="mt-7 p-5">
               <SectionLabel>What travels with you</SectionLabel>
               <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
-                These hold their value across every destination below.
+                Skills shared across your suggested destinations.
               </p>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {swap.portableSkills.map((skill) => (
@@ -385,25 +410,11 @@ export function TransitionerStage({
             </Card>
           ) : null}
 
-          <section className="mt-9">
-            <h2 className="text-[19px] font-semibold tracking-tight text-ink">
-              {swap.destinations.length} sectors within reach
-            </h2>
-            <p className="mt-2 max-w-prose text-[13.5px] leading-relaxed text-ink-2">
-              Ordered by how much of your experience already carries over — a
-              lower match is not a worse destination, it is a longer one. Each
-              is set against your resume on the same six questions, so switching
-              tabs changes the answers and not the frame.
-            </p>
 
-            <div className="mt-5">
-              <ComparePaths paths={swap.destinations} profile={profile} />
-            </div>
-          </section>
-
-          <BasisNote swap={swap} />
-
-          <TalkToSomeone swap={swap} />
+            {swap.portableSkills.length === 0 ? <p className="mt-4 text-sm text-ink-2">No shared skills were identified. Check each destination for its individual skill matches.</p> : null}
+          </> },
+          ...(swap.coaches.length > 0 ? [{ id: "coaching", label: "Talk to a coach", icon: <MessagesSquare />, content: <TalkToSomeone swap={swap} /> }] : []),
+          ]} />
         </>
       )}
     </div>

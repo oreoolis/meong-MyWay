@@ -184,7 +184,7 @@ export type ResumeImprovement = {
  * ---------------------------------------------------------------------- */
 
 /**
- * Where a recommendation's facts came from.
+ * Where a recommendation's facts came from. 
  *
  *  - framework: real Skills Framework roles, matched by embedding. Salary
  *    bands are the framework's published figures.
