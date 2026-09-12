@@ -4,7 +4,7 @@ import { useId, useRef, useState } from "react";
 import {
   Briefcase,
   Building2,
-  CircleDollarSign,
+  ChevronDown,
   Compass,
   Route as RouteIcon,
   TriangleAlert,
@@ -13,28 +13,12 @@ import {
 import type { CareerPath, GapSeverity, PathKind, ResumeProfile } from "@/lib/contracts";
 import { cn, formatCompactMoney } from "@/lib/utils";
 import { Meter } from "./primitives";
+import styles from "./career-workspace.module.css";
 import { CriticalIcon, ModerateIcon, SeriousIcon } from "./icons";
 
-/**
- * Career paths as a side-by-side comparison, one at a time.
- *
- * Replaces a column of expandable cards. That layout put four destinations ×
- * seven sections on one page and asked the reader to hold the differences in
- * their head: everything was visible, nothing was comparable, and the only way
- * to weigh two options was to scroll between them with the detail collapsed.
- *
- * The tab strip makes the destinations the axis of navigation, and the fixed
- * rows underneath make them comparable — every path is described against the
- * same six questions in the same order, so moving between tabs changes the
- * answers while the questions stay put. That is the whole point of the format:
- * a stable frame is what lets a reader diff two things.
- *
- * The left column is the reader's own resume, so each row reads as a delta
- * rather than as a spec sheet. Where the resume genuinely cannot answer a row
- * — nobody's CV states the salary band of a job they have not taken — the row
- * says so rather than inventing a baseline, and rows that only make sense
- * about the destination span the full width instead of padding the left cell
- * with a dash.
+/** A destination shelf with a consistent detail panel for each path.
+ * Details start closed so the summary remains scannable, then expand individually.
+ * The skills comparison retains the reader's resume as its baseline.
  */
 
 /* Category identity. The dot carries the hue and the label carries the
@@ -87,32 +71,12 @@ function Chips({ items, tone }: { items: string[]; tone: "neutral" | "accent" })
 
 const ROWS: Row[] = [
   {
-    key: "overview",
-    label: "The role",
-    Icon: Briefcase,
-    left: (profile) => (
-      <>
-        <p className="text-[14px] font-medium text-ink">{profile.headline}</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
-          {profile.yearsExperience} years in, on the track your resume already
-          describes.
-        </p>
-      </>
-    ),
-    right: (path) => (
-      <>
-        <p className="text-[14px] font-medium text-ink">{path.title}</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{path.summary}</p>
-      </>
-    ),
-  },
-  {
     key: "why",
-    label: "Why you",
+    label: "Why this fits",
     Icon: Compass,
     left: () => null,
     right: (path) => (
-      <p className="text-[13px] leading-relaxed text-ink-2">{path.rationale}</p>
+      <p className="text-[13px] leading-relaxed text-ink-2">{path.rationale || "No additional rationale was provided for this path."}</p>
     ),
   },
   {
@@ -163,48 +127,13 @@ const ROWS: Row[] = [
       ),
   },
   {
-    key: "cost",
-    label: "Time and pay",
-    Icon: CircleDollarSign,
-    left: () => (
-      <p className="text-[13px] leading-relaxed text-ink-muted">
-        A resume does not state what you earn now, so there is no baseline here
-        to compare against — bring your current package to the comparison
-        yourself.
-      </p>
-    ),
-    right: (path) => (
-      <dl className="flex flex-wrap gap-x-8 gap-y-3">
-        <div>
-          <dt className="text-[12px] text-ink-muted">Time to ready</dt>
-          <dd className="mt-0.5 text-[13.5px] font-medium text-ink">
-            {path.timeToReady || "Not estimated"}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-[12px] text-ink-muted">Typical band</dt>
-          <dd className="mt-0.5 text-[13.5px] font-medium tabular-nums text-ink">
-            {path.salary.low > 0
-              ? `${path.salary.currency} ${formatCompactMoney(path.salary.low)}–${formatCompactMoney(path.salary.high)}`
-              : "Not published"}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-[12px] text-ink-muted">Demand</dt>
-          <dd className="mt-0.5 text-[13.5px] font-medium capitalize text-ink">
-            {path.demand}
-          </dd>
-        </div>
-      </dl>
-    ),
-  },
-  {
     key: "route",
     label: "The route",
     Icon: Building2,
     left: () => null,
     right: (path) => (
       <>
+        {path.milestones.length === 0 ? <p className="text-[13px] text-ink-2">No milestones were provided for this path yet.</p> : null}
         <ol className="space-y-4">
           {path.milestones.map((milestone, i) => (
             <li key={milestone.phase} className="flex gap-3.5">
@@ -300,7 +229,7 @@ function TabStrip({
     <div
       role="tablist"
       aria-label="Career destinations"
-      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className={styles.shelf}
     >
       {paths.map((path, index) => {
         const active = index === selected;
@@ -320,28 +249,17 @@ function TabStrip({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(index)}
             onKeyDown={(event) => onKeyDown(event, index)}
-            className={cn(
-              "flex shrink-0 items-center gap-2 rounded-xl border px-3.5 py-2 text-left transition-all",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-              active
-                ? "border-ink-muted bg-surface shadow-[var(--shadow-card)]"
-                : "border-transparent bg-raised hover:bg-surface",
-            )}
+            className={styles.destination}
           >
-            <span
-              aria-hidden="true"
-              className={cn("h-2 w-2 shrink-0 rounded-full", kind.dot)}
-            />
-            <span
-              className={cn(
-                "whitespace-nowrap text-[13.5px] font-medium",
-                active ? "text-ink" : "text-ink-2",
-              )}
-            >
-              {path.title}
+            <span className={styles.cover}>
+              {path.kind === "progression" ? <RouteIcon /> : path.kind === "adjacent" ? <Briefcase /> : <Compass />}
+              <span>{path.matchScore}/100 fit</span>
             </span>
-            <span className="shrink-0 rounded-full bg-accent-wash px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink">
-              {path.matchScore}
+            <strong>{path.title}</strong>
+            <small>{kind.label}</small>
+            <span className={styles.cardFooter}>
+              <span>{path.timeToReady || "Timeline not estimated"}</span>
+              <span className={styles.selectionMark} aria-hidden="true">{active ? "✓" : "→"}</span>
             </span>
           </button>
         );
@@ -365,7 +283,8 @@ export function ComparePaths({
 
   if (paths.length === 0) return null;
 
-  const path = paths[Math.min(selected, paths.length - 1)];
+  const activeIndex = Math.min(selected, paths.length - 1);
+  const path = paths[activeIndex];
   const kind = KIND_META[path.kind];
 
   const idFor = (index: number) => `${base}-tab-${index}`;
@@ -375,111 +294,42 @@ export function ComparePaths({
     <div>
       <TabStrip
         paths={paths}
-        selected={selected}
+        selected={activeIndex}
         onSelect={setSelected}
         idFor={idFor}
         panelIdFor={panelIdFor}
       />
 
-      <div
-        role="tabpanel"
-        id={panelIdFor(selected)}
-        aria-labelledby={idFor(selected)}
-        tabIndex={0}
-        className="mt-4 overflow-hidden rounded-2xl border border-hairline bg-surface shadow-[var(--shadow-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      >
-        {/* The table scrolls inside its own box; the page never scrolls
-            sideways because of it. */}
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left">
-            <caption className="sr-only">
-              {baselineLabel} compared with {path.title}
-            </caption>
-
-            <thead>
-              <tr className="border-b border-hairline bg-raised">
-                <th
-                  scope="col"
-                  className="w-44 border-r border-hairline p-4 align-bottom text-[11px] font-semibold uppercase tracking-[0.09em] text-ink-muted sm:w-52 sm:p-5"
-                >
-                  Compare
-                </th>
-                <th
-                  scope="col"
-                  className="min-w-[240px] border-r border-hairline p-4 align-bottom sm:p-5"
-                >
-                  <p className="text-[15px] font-semibold tracking-tight text-ink">
-                    {baselineLabel}
-                  </p>
-                  <p className="mt-0.5 text-[12.5px] text-ink-muted">
-                    {profile.candidateName}
-                  </p>
-                </th>
-                <th scope="col" className="min-w-[280px] p-4 align-bottom sm:p-5">
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[15px] font-semibold tracking-tight text-ink">
-                        {path.title}
-                      </p>
-                      <span className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] font-normal text-ink-2">
-                        <span
-                          aria-hidden="true"
-                          className={cn("h-1.5 w-1.5 rounded-full", kind.dot)}
-                        />
-                        {kind.label}
-                      </span>
-                    </div>
-                    <Meter
-                      value={path.matchScore}
-                      label="Match"
-                      valueLabel={`${path.matchScore}`}
-                      className="w-32"
-                    />
-                  </div>
-                </th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {ROWS.map((row, index) => {
-                const left = row.left(profile);
-                const last = index === ROWS.length - 1;
-
-                return (
-                  <tr key={row.key} className={last ? "" : "border-b border-hairline"}>
-                    <th
-                      scope="row"
-                      className="border-r border-hairline bg-raised p-4 align-top sm:p-5"
-                    >
-                      <span className="flex items-center gap-2 text-[13px] font-medium text-ink">
-                        <row.Icon className="h-4 w-4 shrink-0 text-ink-muted" />
-                        {row.label}
-                      </span>
-                    </th>
-
-                    {left === null ? (
-                      // Nothing on the resume answers this one, so the
-                      // destination's answer takes the whole width rather than
-                      // sitting next to an empty cell pretending to be a
-                      // comparison.
-                      <td colSpan={2} className="p-4 align-top sm:p-5">
-                        {row.right(path)}
-                      </td>
-                    ) : (
-                      <>
-                        <td className="border-r border-hairline p-4 align-top sm:p-5">
-                          {left}
-                        </td>
-                        <td className="p-4 align-top sm:p-5">{row.right(path)}</td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {paths.map((item, index) => <div key={item.id} role="tabpanel"
+        id={panelIdFor(index)} aria-labelledby={idFor(index)} tabIndex={0}
+        hidden={index !== activeIndex} className={styles.pathDetail}>
+        {index === activeIndex && <>
+          <div className={styles.pathHero}>
+            <div><p className="text-xs font-medium text-ink-2">{kind.label}</p>
+              <h3 className="mt-2 text-xl font-semibold tracking-tight">{path.title}</h3>
+              <p className="mt-2 max-w-prose text-sm leading-relaxed text-ink-2">{path.summary}</p>
+            </div>
+            <Meter value={path.matchScore} label="Resume fit" className="w-32" />
+            <dl className={styles.facts}>
+              <div><dt>Time to ready</dt><dd>{path.timeToReady || "Not estimated"}</dd></div>
+              <div><dt>Monthly salary band</dt><dd>{path.salary.low > 0 ? `${path.salary.currency} ${formatCompactMoney(path.salary.low)}–${formatCompactMoney(path.salary.high)}` : "Not published"}</dd></div>
+              <div><dt>Demand</dt><dd className="capitalize">{path.demand}</dd></div>
+              <div><dt>Skills to build</dt><dd>{path.gaps.length}</dd></div>
+            </dl>
+          </div>
+          {ROWS.map((row) =>
+            <details key={`${path.id}-${row.key}`} className={styles.detail}>
+              <summary><row.Icon className="h-4 w-4 shrink-0" />{row.label}<ChevronDown aria-hidden="true" className={styles.disclosureIcon} /></summary>
+              <div className={styles.detailBody}>
+                {row.key === "carries" ? <div className={styles.comparison}>
+                  <div><p className="mb-3 text-xs font-semibold text-ink-2">{baselineLabel}</p>{row.left(profile)}</div>
+                  <div><p className="mb-3 text-xs font-semibold text-ink-2">Relevant to this path</p>{row.right(path)}</div>
+                </div> : row.right(path)}
+              </div>
+            </details>
+          )}
+        </>}
+      </div>)}
     </div>
   );
 }
