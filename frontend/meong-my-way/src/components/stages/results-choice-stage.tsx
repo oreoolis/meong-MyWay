@@ -87,9 +87,6 @@ function Door({
             label="Career swapper progress"
             hint={disabledReason}
           />
-          <p className="mt-2 text-[12px] text-ink-muted">
-            Usually about 30 seconds. The other branch is ready now.
-          </p>
         </div>
       ) : (
         <p className="mt-6 flex items-center gap-2 text-[12.5px] text-ink-muted">

@@ -2,9 +2,11 @@
 
 import { useRef, useState } from "react";
 
-import { Button, Card, SectionLabel } from "@/components/ui/primitives";
+import { Button, SectionLabel } from "@/components/ui/primitives";
+import { ResumeScreeningPanel } from "@/components/ui/resume-screening-panel";
 import {
   ArrowRightIcon,
+  CriticalIcon,
   DocumentIcon,
   LockIcon,
   UploadIcon,
@@ -19,6 +21,14 @@ import {
 import type { StoredResume } from "@/lib/resume/types";
 import { cn, formatBytes } from "@/lib/utils";
 
+/**
+ * Upload, as a two-column split: the form on the left, and on the right a
+ * picture of what the file is about to go through.
+ *
+ * There is no consent checkbox. Uploading is the consent — the file is kept on
+ * the account either way, so a box that could only ever be ticked was a step
+ * that asked a question it would not take no for an answer to.
+ */
 export function UploadStage({
   file,
   onFileChange,
@@ -29,7 +39,7 @@ export function UploadStage({
 }: {
   file: File | null;
   onFileChange: (file: File | null) => void;
-  onAnalyze: (consented: boolean) => void;
+  onAnalyze: () => void;
   /** What is already on the user's account, if anything. */
   storedResume?: StoredResume | null;
   /** A failure reported by the server on the last attempt. */
@@ -38,13 +48,12 @@ export function UploadStage({
 }) {
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consent, setConsent] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function accept(candidate: File | undefined) {
     if (!candidate) return;
 
-    // Rejected here, before any request, so nothing reaches S3 or DynamoDB.
+    // Rejected here, before any request, so nothing reaches storage.
     const problem = validateResumeUpload(candidate);
     if (problem) {
       setError(problem);
@@ -73,110 +82,122 @@ export function UploadStage({
   const shownError = error ?? uploadError ?? null;
 
   return (
-    <div className="mw-rise mx-auto w-full max-w-2xl">
-      <SectionLabel>Step 2</SectionLabel>
-      <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-        {replacing ? "Replace your resume" : "Upload your resume"}
-      </h1>
-      <p className="mt-2 text-[14.5px] leading-relaxed text-ink-2">
-        One file is enough. It is stored on your account, then the parser agent
-        reads it and hands what it finds to the career planner.
-      </p>
+    <div className="flex min-h-[calc(100dvh_-_var(--app-header-h))] flex-col md:flex-row">
+      <section className="flex flex-1 items-center justify-center px-5 py-12 sm:px-8">
+        <div className="w-full max-w-md">
+          <div className="mw-rise">
+            <SectionLabel>Step 1 of 3</SectionLabel>
+            <h1 className="mt-2 text-[30px] font-semibold leading-[1.15] tracking-tight text-ink sm:text-[34px]">
+              {replacing ? "Replace your resume" : "Upload your resume"}
+            </h1>
+            <p className="mt-3 text-[14.5px] leading-relaxed text-ink-2">
+              One file is all we need. We&rsquo;ll read it and map out where
+              your experience can take you next.
+            </p>
+          </div>
 
-      {storedResume ? <StoredResumeNotice resume={storedResume} /> : null}
+          {storedResume ? <StoredResumeNotice resume={storedResume} /> : null}
 
-      <Card className="mt-5 p-5 sm:p-6">
-        {file ? (
-          <FileCard file={file} onRemove={clearFile} />
-        ) : (
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            className={cn(
-              "rounded-xl border-2 border-dashed p-8 text-center transition-colors sm:p-10",
-              dragging ? "border-accent bg-accent-wash" : "border-hairline bg-plane",
+          <div className="mw-rise mw-delay-1 mt-6">
+            {file ? (
+              <FileCard file={file} onRemove={clearFile} />
+            ) : (
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                className={cn(
+                  "rounded-2xl border-2 border-dashed p-8 text-center transition-colors sm:p-10",
+                  dragging
+                    ? "border-accent bg-accent-wash"
+                    : "border-hairline bg-raised",
+                )}
+              >
+                <span
+                  className={cn(
+                    "mx-auto flex h-12 w-12 items-center justify-center rounded-xl transition-colors",
+                    dragging
+                      ? "bg-accent text-accent-ink"
+                      : "bg-surface text-ink-2",
+                  )}
+                >
+                  <UploadIcon className="h-5 w-5" />
+                </span>
+
+                <p className="mt-4 text-[15px] font-medium text-ink">
+                  Drop your resume here
+                </p>
+                <p className="mt-1 text-[13px] text-ink-2">
+                  {RESUME_FORMATS_LABEL} file, up to{" "}
+                  {formatBytes(MAX_RESUME_BYTES)}
+                </p>
+
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="mt-5"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  Choose a file
+                </Button>
+
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept={RESUME_ACCEPT_ATTRIBUTE}
+                  className="sr-only"
+                  onChange={(e) => accept(e.target.files?.[0])}
+                />
+              </div>
             )}
-          >
-            <span
-              className={cn(
-                "mx-auto flex h-12 w-12 items-center justify-center rounded-xl transition-colors",
-                dragging ? "bg-accent text-accent-ink" : "bg-raised text-ink-2",
-              )}
-            >
-              <UploadIcon className="h-5 w-5" />
-            </span>
 
-            <p className="mt-4 text-[15px] font-medium text-ink">
-              Drop your resume here
-            </p>
-            <p className="mt-1 text-[13px] text-ink-2">
-              {RESUME_FORMATS_LABEL} only · up to {formatBytes(MAX_RESUME_BYTES)}
-            </p>
+            {/* Given its own surface rather than a line of red text: this now
+                also carries the verdict on a file that was accepted, uploaded,
+                and only then turned down, which is a sentence or two and is
+                the one thing on the page worth reading twice. */}
+            {shownError ? (
+              <div
+                role="alert"
+                className="mw-fade mt-4 flex items-start gap-2.5 rounded-xl border border-critical/40 bg-surface p-3.5"
+              >
+                <CriticalIcon className="mt-px h-4 w-4 shrink-0 text-critical" />
+                <p className="text-[13px] leading-relaxed text-ink-2">
+                  {shownError}
+                </p>
+              </div>
+            ) : null}
+          </div>
 
+          <div className="mw-rise mw-delay-2 mt-6">
             <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="mt-5"
-              onClick={() => inputRef.current?.click()}
+              className="w-full"
+              disabled={!file || busy}
+              onClick={onAnalyze}
             >
-              Browse files
+              {busy
+                ? "Uploading…"
+                : replacing
+                  ? "Replace and start again"
+                  : "Analyze my resume"}
+              {busy ? null : <ArrowRightIcon className="h-4 w-4" />}
             </Button>
 
-            <input
-              ref={inputRef}
-              type="file"
-              accept={RESUME_ACCEPT_ATTRIBUTE}
-              className="sr-only"
-              onChange={(e) => accept(e.target.files?.[0])}
-            />
+            <p className="mt-4 flex items-start justify-center gap-2 text-[12.5px] leading-relaxed text-ink-muted">
+              <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Kept on your account so you only upload once. Only you can see
+                it.
+              </span>
+            </p>
           </div>
-        )}
+        </div>
+      </section>
 
-        {shownError ? (
-          <p role="alert" className="mt-4 text-[13px] text-critical">
-            {shownError}
-          </p>
-        ) : null}
-
-        <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-lg bg-plane p-3.5">
-          <input
-            type="checkbox"
-            checked={consent}
-            onChange={(e) => setConsent(e.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent)]"
-          />
-          <span className="text-[13px] leading-relaxed text-ink-2">
-            <span className="font-medium text-ink">
-              Store this resume and its embeddings on my account.
-            </span>{" "}
-            The file goes to S3 and its metadata to DynamoDB, so the planner can
-            re-run when you sign back in without a re-upload.
-          </span>
-        </label>
-
-        <Button
-          className="mt-5 w-full"
-          disabled={!file || !consent || busy}
-          onClick={() => onAnalyze(consent)}
-        >
-          {busy
-            ? "Uploading…"
-            : replacing
-              ? "Replace and re-run the agents"
-              : "Run the agents"}
-          {busy ? null : <ArrowRightIcon className="h-4 w-4" />}
-        </Button>
-      </Card>
-
-      <p className="mt-4 flex items-center justify-center gap-2 text-[12px] text-ink-muted">
-        <LockIcon className="h-3.5 w-3.5" />
-        Only you can read your stored resume. It is keyed to your account.
-      </p>
+      <ResumeScreeningPanel />
     </div>
   );
 }
@@ -184,7 +205,7 @@ export function UploadStage({
 /** What is already on file, so replacing it is a deliberate act. */
 function StoredResumeNotice({ resume }: { resume: StoredResume }) {
   return (
-    <div className="mw-fade mt-5 rounded-xl border border-hairline bg-raised p-4">
+    <div className="mw-fade mt-6 rounded-xl border border-hairline bg-raised p-4">
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent">
           <DocumentIcon className="h-4 w-4" />
@@ -200,8 +221,7 @@ function StoredResumeNotice({ resume }: { resume: StoredResume }) {
         </div>
       </div>
       <p className="mt-3 text-[12.5px] leading-relaxed text-ink-2">
-        Uploading a new file replaces this one and gives the agents a different
-        resume to work from.
+        Uploading a new file replaces this one.
       </p>
     </div>
   );
@@ -211,7 +231,7 @@ function FileCard({ file, onRemove }: { file: File; onRemove: () => void }) {
   const extension = file.name.split(".").pop()?.toUpperCase() ?? "FILE";
 
   return (
-    <div className="mw-fade flex items-center gap-4 rounded-xl border border-hairline bg-plane p-4">
+    <div className="mw-fade flex items-center gap-4 rounded-2xl border border-hairline bg-surface p-4 shadow-[var(--shadow-card)]">
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent">
         <DocumentIcon className="h-5 w-5" />
       </span>

@@ -3,6 +3,7 @@ import { authJson, authenticateRequest } from "@/lib/auth/route-guard";
 import { AgentReasoningError } from "@/lib/bedrock/reason";
 import { runAnalysis } from "@/lib/agents/orchestrator";
 import { deleteAnalysis, getAnalysis } from "@/lib/agents/store";
+import { DocumentRejectedError } from "@/lib/resume/file-policy";
 import { getResume } from "@/lib/resume/store";
 
 /**
@@ -78,6 +79,18 @@ export async function POST(request: Request) {
   } catch (error) {
     const configured = configurationErrorResponse(error);
     if (configured) return configured;
+
+    // The document was read and found wanting — not a resume, or unreadable.
+    // Nothing is wrong with the run, so this is not a 5xx and not retryable:
+    // the same file will be rejected the same way every time. The caller's
+    // message says so, and the UI puts it back beside the file picker.
+    if (error instanceof DocumentRejectedError) {
+      console.warn("[api/analysis] rejected the stored document:", error.message);
+      return authJson(
+        { error: error.message, kind: "document-rejected", retryable: false },
+        422,
+      );
+    }
 
     // A model failure is worth distinguishing: it is usually transient
     // (throttling, a malformed reply) and retrying often succeeds, whereas a

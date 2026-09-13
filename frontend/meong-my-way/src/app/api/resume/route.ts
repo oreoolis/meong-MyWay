@@ -2,6 +2,7 @@ import { AwsConfigurationError } from "@/lib/aws/clients";
 import { authJson, authenticateRequest } from "@/lib/auth/route-guard";
 import {
   RESUME_FORMATS,
+  RESUME_FORMATS_LABEL,
   resolveResumeFormat,
   sniffResumeFormat,
   validateResumeUpload,
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     type: file.type,
   });
   if (!format) {
-    return authJson({ error: "Only PDF or DOCX files are accepted." }, 415);
+    return authJson({ error: `Only ${RESUME_FORMATS_LABEL} files are accepted.` }, 415);
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
     return authJson(
       {
         error:
-          "That file's contents don't match its extension. Re-export it as a PDF or DOCX and try again.",
+          "That file does not look like the kind of file its name says it is. Save your resume again as a PDF and try once more.",
       },
       415,
     );

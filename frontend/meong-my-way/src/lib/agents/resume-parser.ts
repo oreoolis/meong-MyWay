@@ -3,6 +3,10 @@ import "server-only";
 import type { ExtractedSkill, ResumeProfile } from "@/lib/contracts";
 import { embedResumeText, type ResumeEmbedding } from "@/lib/bedrock/embeddings";
 import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import {
+  DocumentRejectedError,
+  resumeContentProblem,
+} from "@/lib/resume/file-policy";
 import type { StoredResume } from "@/lib/resume/types";
 
 /**
@@ -20,11 +24,18 @@ import type { StoredResume } from "@/lib/resume/types";
  * model writes for the purpose — rather than raw extracted text. Page headers,
  * footers, and two-column artefacts otherwise end up in the vector and drag
  * every similarity score toward the mean.
+ *
+ * This is also where a document that is not a resume stops. It is the first
+ * step that can tell — a marketing report is as valid a PDF as anyone's CV —
+ * and it has to stop here, because the planner downstream will not fail on an
+ * empty profile. It will plan a career from it.
  */
 
 const SYSTEM = `You extract structured data from resumes. You are precise and you never invent facts.
 
 Rules:
+- First decide what the document actually is. A resume or CV describes one person's own work history. A report, invoice, article, form, contract, job advert, or company profile is not a resume, however professional it looks.
+- If it is not a resume, set "documentKind" to "other", describe what it is instead in "documentSummary" in under eight words, and leave every other field empty. Do not attempt an extraction.
 - Use only what the document states. If a field is absent, use an empty string, an empty array, or 0.
 - "evidence" must quote the resume verbatim. Never paraphrase it.
 - "confidence" is 0-1: 1.0 when the resume demonstrates the skill through described work, 0.5 when it is only listed in a skills section.
@@ -39,6 +50,8 @@ Rules:
 const PROMPT = `Extract this resume as JSON matching exactly this shape:
 
 {
+  "documentKind": "resume" | "other",
+  "documentSummary": string,
   "candidateName": string,
   "headline": string,
   "location": string,
@@ -53,6 +66,8 @@ const PROMPT = `Extract this resume as JSON matching exactly this shape:
 }
 
 Guidance:
+- "documentKind": "resume" only for a resume or CV. Anything else is "other".
+- "documentSummary": what the document is, when it is not a resume — for example "a quarterly marketing report" or "a signed tenancy agreement". Leave it empty for a resume.
 - "headline": the candidate's current role and specialism in under 12 words.
 - "yearsExperience": total professional years, rounded to a whole number.
 - "skills": up to 20, strongest evidence first.
@@ -60,6 +75,8 @@ Guidance:
 
 /** What the model is asked for, before it is reconciled with the stored file. */
 type ParserPayload = {
+  documentKind?: string;
+  documentSummary?: string;
   candidateName?: string;
   headline?: string;
   location?: string;
@@ -149,13 +166,25 @@ export async function parseResume(
     maxTokens: 4096,
   });
 
-  const embeddingText =
-    value.embeddingText?.trim() || synthesiseEmbeddingText(value);
-  const embedding = await embedResumeText(embeddingText);
-
   const skills = (value.skills ?? [])
     .map(normaliseSkill)
     .filter((skill): skill is ExtractedSkill => skill !== null);
+
+  // The gate, and it comes before the embedding on purpose: embedding a
+  // rejected document would spend a model call and write a vector for
+  // something nothing downstream is allowed to use.
+  const problem = resumeContentProblem({
+    kind: value.documentKind,
+    description: value.documentSummary,
+    skillCount: skills.length,
+    experienceCount: value.experience?.length ?? 0,
+    educationCount: value.education?.length ?? 0,
+  });
+  if (problem) throw new DocumentRejectedError(problem);
+
+  const embeddingText =
+    value.embeddingText?.trim() || synthesiseEmbeddingText(value);
+  const embedding = await embedResumeText(embeddingText);
 
   const profile: ResumeProfile = {
     candidateName: value.candidateName?.trim() || "Unnamed candidate",

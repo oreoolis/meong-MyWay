@@ -36,6 +36,10 @@
 
   --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 24px -12px rgba(17, 24, 39, 0.12);
   --shadow-lift: 0 2px 4px rgba(17, 24, 39, 0.05), 0 16px 40px -16px rgba(17, 24, 39, 0.18);
+
+  /* Height of the sticky app header (bar + stepper), so a full-height stage
+     can subtract it instead of guessing at it. */
+  --app-header-h: 6.5rem;
 }
 
 /* Status palette — fixed, never themed. Always shipped with an icon + label
@@ -170,6 +174,36 @@ html {
   }
 }
 
+@keyframes mw-scan {
+  0% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  14%,
+  82% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(var(--mw-scan-distance, 200px));
+  }
+}
+
+@keyframes mw-track {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes mw-route-draw {
+  to {
+    stroke-dashoffset: -48;
+  }
+}
+
 @keyframes mw-float {
   0%,
   100% {
@@ -280,6 +314,36 @@ html {
   animation: mw-halo 1.6s ease-in-out infinite;
 }
 
+/* How long one slide of the upload panel carousel runs. The slide advances
+   off this animation ending rather than off a timer of its own, so the bar a
+   reader is watching and the picture it belongs to can never drift apart. */
+.mw-track {
+  transform-origin: left center;
+  /* Longhands, not the shorthand: the shorthand would reset animation-play-state
+     on every declaration, and the panel pauses the bar by setting exactly that. */
+  animation-name: mw-track;
+  animation-duration: 5.4s;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+/* Dashes running along a connector, from the resume to one of the routes. */
+.mw-route-draw {
+  stroke-dasharray: 5 7;
+  animation: mw-route-draw 1.6s linear infinite;
+}
+
+/* A sheet held just above the drop target it is about to land in. */
+.mw-float {
+  animation: mw-float 5s ease-in-out infinite;
+}
+
+/* A review pass travelling down the resume sheet in the upload panel. The
+   distance it covers is set per use, since it depends on the sheet. */
+.mw-scan {
+  animation: mw-scan 3.6s 700ms ease-in-out infinite;
+}
+
 /* --------------------------------------------------------------------------
    Retro loading screen. Scoped to the pixel-art pipeline scene — deliberately
    chunky and step-timed, where the rest of the app's motion is smooth.
@@ -384,6 +448,10 @@ html {
   .mw-rise,
   .mw-fade,
   .mw-halo,
+  .mw-scan,
+  .mw-track,
+  .mw-route-draw,
+  .mw-float,
   .mw-route-card,
   .mw-flow-node,
   .mw-flow-connector::after,
@@ -393,6 +461,11 @@ html {
   .mw-blink,
   .mw-folder-down {
     animation: none !important;
+  }
+  /* Parked mid-sheet without the animation to carry it across, so it is
+     withdrawn rather than left sitting on the resume as a stray band. */
+  .mw-scan {
+    opacity: 0 !important;
   }
   /* Purely decorative, and parked off its branch without the animation to
      carry it — so it is withdrawn rather than left stranded mid-card. */

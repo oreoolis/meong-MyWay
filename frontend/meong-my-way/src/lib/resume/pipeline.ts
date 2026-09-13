@@ -112,6 +112,11 @@ function agentSteps(agent: AgentId, doneCount: number): AgentStep[] {
  * Stops one step short of complete, so the final step only turns green once
  * the server has actually answered — the UI never claims a finished agent
  * before there is a result behind it.
+ *
+ * Settling is raced against the timer rather than checked after it. Waiting
+ * out the current tick first would leave a step advancing up to 1.4s after the
+ * run it belongs to was already over, which is the whole of the lie this
+ * module is trying not to tell.
  */
 async function narrate(
   agent: AgentId,
@@ -123,7 +128,9 @@ async function narrate(
   let done = 0;
   let settled = false;
 
-  void until.then(
+  // Resolves either way: a failed run has to stop the narration exactly as a
+  // finished one does, and the caller is the one that decides which it was.
+  const stop = until.then(
     () => {
       settled = true;
     },
@@ -135,7 +142,13 @@ async function narrate(
   events.onAgentSteps(agent, agentSteps(agent, 0));
 
   while (!settled && done < steps.length - 1 && !signal.aborted) {
-    await sleep(1400, signal);
+    const tick = sleep(1400, signal);
+    // Losing the race leaves this pending, and an abort would then reject a
+    // promise nothing is waiting on. Claimed here so it is never unhandled;
+    // the race still sees the rejection and propagates it.
+    void tick.catch(() => {});
+
+    await Promise.race([tick, stop]);
     if (settled || signal.aborted) break;
     done += 1;
     events.onAgentSteps(agent, agentSteps(agent, done));
@@ -192,17 +205,44 @@ export async function runResumePipeline(
   // the server begins immediately rather than after the first animated step.
   const run = runAnalysis(signal);
 
+  // Watched for failure, not only for completion.
+  //
+  // The narration below is a script, not a progress feed: it walks each agent
+  // forward on its own and only stops when the request settles. So a run the
+  // server has already abandoned — a document that turned out not to be a
+  // resume dies in the parser, the first agent of five — would otherwise go on
+  // to announce the planner, then the improver and the advisor, lighting up
+  // three more cards and several seconds of a pipeline that is not running.
+  //
+  // Whatever the screen says after that point is false. The rejection is
+  // caught the moment it lands and thrown at the next seam, so the run stops
+  // on the agent that actually failed.
+  let failed = false;
+  let failure: unknown;
+  void run.catch((error: unknown) => {
+    failed = true;
+    failure = error;
+  });
+
+  /** Give up here rather than narrating the next agent. */
+  function stopIfFailed(): void {
+    if (failed) throw failure;
+  }
+
   events.onPhase("parsing");
   await narrate("parser", events, run, signal);
+  stopIfFailed();
 
   events.onPhase("handoff");
   await narrate("planner", events, run, signal);
+  stopIfFailed();
 
   events.onPhase("specialists");
   await Promise.all([
     narrate("improver", events, run, signal),
     narrate("advisor", events, run, signal),
   ]);
+  stopIfFailed();
 
   const analysis = await run;
 

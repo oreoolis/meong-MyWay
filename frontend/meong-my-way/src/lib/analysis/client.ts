@@ -21,12 +21,24 @@ export class AnalysisRequestError extends Error {
   readonly status: number;
   /** Model failures are usually transient; the UI offers a retry for those. */
   readonly retryable: boolean;
+  /**
+   * The run was fine and the document was not: it is not a resume, or it
+   * cannot be read. Retrying is pointless, so the UI sends the user back to
+   * the file picker instead of offering one.
+   */
+  readonly documentRejected: boolean;
 
-  constructor(message: string, status: number, retryable = false) {
+  constructor(
+    message: string,
+    status: number,
+    retryable = false,
+    documentRejected = false,
+  ) {
     super(message);
     this.name = "AnalysisRequestError";
     this.status = status;
     this.retryable = retryable;
+    this.documentRejected = documentRejected;
   }
 }
 
@@ -48,11 +60,17 @@ async function authHeaders(): Promise<HeadersInit> {
 async function failure(response: Response): Promise<AnalysisRequestError> {
   let message = "The agents could not finish. Try again.";
   let retryable = false;
+  let documentRejected = false;
 
   try {
-    const body = (await response.json()) as { error?: unknown; retryable?: unknown };
+    const body = (await response.json()) as {
+      error?: unknown;
+      retryable?: unknown;
+      kind?: unknown;
+    };
     if (typeof body.error === "string" && body.error) message = body.error;
     if (typeof body.retryable === "boolean") retryable = body.retryable;
+    documentRejected = body.kind === "document-rejected";
   } catch {
     // Keep the default message.
   }
@@ -61,7 +79,12 @@ async function failure(response: Response): Promise<AnalysisRequestError> {
     message = "Your session has expired. Sign in again.";
   }
 
-  return new AnalysisRequestError(message, response.status, retryable);
+  return new AnalysisRequestError(
+    message,
+    response.status,
+    retryable,
+    documentRejected,
+  );
 }
 
 /**

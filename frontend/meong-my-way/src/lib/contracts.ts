@@ -17,7 +17,7 @@ export type Session = {
   userId: string;
   email: string;
   displayName: string;
-  /** Whether the user consented to their resume + embeddings being stored. */
+  /** Whether the resume + embeddings are stored on the account. Set on upload. */
   storageConsent: boolean;
 };
 

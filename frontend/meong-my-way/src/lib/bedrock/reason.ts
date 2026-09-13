@@ -9,6 +9,10 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 
 import { getBedrockClient, getBedrockConfig } from "@/lib/aws/clients";
+import {
+  DocumentRejectedError,
+  RESUME_FORMATS_LABEL,
+} from "@/lib/resume/file-policy";
 
 /**
  * The one call every agent makes.
@@ -45,6 +49,24 @@ export class AgentReasoningError extends Error {
     super(message);
     this.name = "AgentReasoningError";
   }
+}
+
+/**
+ * Whether Bedrock refused the request because of the attached document.
+ *
+ * Deliberately narrow. A `ValidationException` covers plenty of faults that
+ * are ours rather than the user's — a bad model id, a malformed tool schema —
+ * and calling one of those "your file is damaged" would send someone off to
+ * re-export a resume that was never the problem. So the message has to name
+ * the document too, and this only ever runs on a request that carried one.
+ */
+function isDocumentRejection(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const { name, message } = error as { name?: unknown; message?: unknown };
+  if (name !== "ValidationException") return false;
+
+  return typeof message === "string" && /\bdocument\b|\bfile\b/i.test(message);
 }
 
 /** Bedrock names document formats by extension; ours are only ever these two. */
@@ -349,6 +371,15 @@ export async function reasonJson<T>(options: ReasonOptions): Promise<ReasonResul
       }),
     );
   } catch (error) {
+    // A document Bedrock cannot open is the caller's problem, not a fault in
+    // the run, and retrying it will fail identically forever.
+    if (options.document && isDocumentRejection(error)) {
+      throw new DocumentRejectedError(
+        "We could not read that file. It may be damaged, password-protected, " +
+          `or not really a ${RESUME_FORMATS_LABEL} file. Save your resume again and re-upload it.`,
+      );
+    }
+
     throw new AgentReasoningError(
       `Bedrock rejected the ${options.agent} request.`,
       options.agent,

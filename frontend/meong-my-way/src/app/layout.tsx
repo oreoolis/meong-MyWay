@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MyWay — agentic career switching",
+  title: "MyWay: Agentic Career Planner",
   description:
     "Upload your resume and let two agents map your current trajectory against realistic alternative career paths.",
 };

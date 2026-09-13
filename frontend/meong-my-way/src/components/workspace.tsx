@@ -218,9 +218,12 @@ export function Workspace() {
             ? err.message
             : "The agents failed to finish. Try running them again.";
 
-        // A rejected upload belongs next to the file picker, not on a stage
-        // the run never really reached.
-        if (phaseFailedBeforeAgents(err)) {
+        // A rejected file belongs next to the file picker, not on a stage
+        // whose only offer is to run the same thing again.
+        if (needsADifferentFile(err)) {
+          // Dropped so the button cannot re-submit the file that was just
+          // turned away; the stored-resume notice still names it.
+          if (documentWasRejected(err)) setFile(null);
           setUploadError(message);
           setStage("upload");
         } else {
@@ -259,9 +262,11 @@ export function Workspace() {
     }
   }
 
-  function handleAnalyze(consented: boolean) {
+  function handleAnalyze() {
     if (!file) return;
-    setSession((prev) => (prev ? { ...prev, storageConsent: consented } : prev));
+    // Uploading is the consent: the file is kept on the account either way, so
+    // the upload step no longer asks a question it would not accept a no to.
+    setSession((prev) => (prev ? { ...prev, storageConsent: true } : prev));
     void runPipeline(file);
   }
 
@@ -300,6 +305,9 @@ export function Workspace() {
 
   const activeIndex = STEPS.findIndex((s) => s.key === stage);
   const isPreAuth = stage === "landing" || stage === "signin";
+  // Upload runs edge to edge: its right-hand panel is a full-height split, not
+  // content sitting inside the centred column the other stages share.
+  const isFullBleed = isPreAuth || stage === "upload";
 
   return (
     <div className="flex min-h-full flex-col">
@@ -314,7 +322,7 @@ export function Workspace() {
 
       <main
         className={
-          isPreAuth
+          isFullBleed
             ? "flex-1"
             : "mx-auto w-full max-w-5xl flex-1 px-5 py-10 sm:px-8 sm:py-14"
         }
@@ -399,17 +407,32 @@ export function Workspace() {
 }
 
 /**
- * Whether a failure happened during the upload rather than inside an agent.
+ * Whether the failure is one the user fixes with a different file.
  *
- * Upload failures are the user's to fix (wrong file type, expired session), so
- * they belong back on the upload stage; agent failures are ours, and stay on
- * the analysis stage with a retry.
+ * Two ways to land here. The upload itself was refused — wrong file type,
+ * expired session — and no agent ever ran. Or an agent did run, read the
+ * document, and rejected it: not a resume, or not readable at all. Different
+ * failures, same remedy, and neither is helped by the retry button on the
+ * analysis stage. Everything else is ours and stays there with the retry.
  */
-function phaseFailedBeforeAgents(error: unknown): boolean {
+function needsADifferentFile(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+
+  const failure = error as { name?: unknown };
+  return failure.name === "ResumeRequestError" || documentWasRejected(error);
+}
+
+/**
+ * Narrower: an agent read the document and turned it down.
+ *
+ * Distinct from the upload being refused, because the file in hand is known to
+ * be unusable rather than merely unsent — so it is cleared, where a session
+ * that expired mid-upload should leave the user's choice intact.
+ */
+function documentWasRejected(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
-    "name" in error &&
-    (error as { name: unknown }).name === "ResumeRequestError"
+    (error as { documentRejected?: unknown }).documentRejected === true
   );
 }

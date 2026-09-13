@@ -2,7 +2,11 @@
 
 import type { AgentId, AgentStep, ResumeProfile } from "@/lib/contracts";
 import { AgentTrace, type AgentCardState } from "@/components/ui/agent-trace";
-import { PixelFolder, RetroOfficeLoader } from "@/components/ui/retro-office";
+import {
+  PixelCargo,
+  RetroOfficeLoader,
+  type CargoKind,
+} from "@/components/ui/retro-office";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import {
   DocumentIcon,
@@ -75,22 +79,97 @@ const AGENT_META: Record<
 const SPECIALISTS: AgentId[] = ["improver", "advisor", "swapper"];
 
 /**
- * The folder in transit, centred on a branch.
+ * What each edge carries, which is not the same thing on every edge.
+ *
+ * The document only ever travels the first one. What leaves the parser is what
+ * the parser made — the extracted fields and the vector — and what leaves the
+ * planner is the plan. Sending a manila folder all the way down would say the
+ * PDF reaches the advisors, and it does not: nothing past the parser reads it.
+ */
+const FROM_STORE = ["file"] as const;
+const FROM_PARSER = ["bits", "vector"] as const;
+const FROM_PLANNER = ["plan"] as const;
+
+export type EdgeCargo = {
+  toParser?: readonly CargoKind[];
+  toPlanner?: readonly CargoKind[];
+  toSpecialists?: readonly CargoKind[];
+};
+
+/**
+ * Which branch is carrying work right now, and what it is carrying.
+ *
+ * Read off the phase rather than off the agent cards, and that is a fix rather
+ * than a preference. The old rule asked for the node above to be `done` and
+ * the one below to be `running`, which only the first edge could ever satisfy:
+ * an agent's narration deliberately stops one step short of complete, so no
+ * agent reads as `done` until the whole request returns — at which point all
+ * four flip together and nothing is `running` any more. The parser was never
+ * `done` while the planner worked, so the lower two edges sat still for the
+ * entire run and the folder never left the first one.
+ *
+ * The phase already says where the work is, and says it while the work is
+ * still there. Exported for its test, because the bug it fixes was a condition
+ * that could never be true — which is invisible in a component and obvious in
+ * an assertion.
+ */
+export function edgeCargo(phase: PipelinePhase, stopped: boolean): EdgeCargo {
+  // Motion after a failure would claim progress that is not happening.
+  if (stopped) return {};
+
+  return {
+    toParser: phase === "parsing" ? FROM_STORE : undefined,
+    // The pipeline holds "handoff" for the whole of the planner's turn.
+    // "planning" is accepted too, so a later split of the two cannot silently
+    // stop this branch the way the old rule did.
+    toPlanner:
+      phase === "handoff" || phase === "planning" ? FROM_PARSER : undefined,
+    toSpecialists: phase === "specialists" ? FROM_PLANNER : undefined,
+  };
+}
+
+/**
+ * A load in transit, centred on a branch.
  *
  * The keyframes drive `top` rather than `transform`, which leaves the
  * `-translate-x-1/2` centring intact and makes the travel distance a fraction
  * of the branch rather than of the sprite. Its parent must be `relative` and
- * clip its overflow, so the folder is only ever visible on the branch it is
+ * clip its overflow, so the sprite is only ever visible on the branch it is
  * actually travelling.
  */
-function TravellingFolder({ delayMs = 0 }: { delayMs?: number }) {
+function TravellingCargo({
+  kind,
+  delayMs = 0,
+}: {
+  kind: CargoKind;
+  delayMs?: number;
+}) {
   return (
     <span
       className="mw-folder-down pointer-events-none absolute left-1/2 -translate-x-1/2"
       style={delayMs ? { animationDelay: `${delayMs}ms` } : undefined}
     >
-      <PixelFolder cell={3} />
+      <PixelCargo kind={kind} cell={3} />
     </span>
+  );
+}
+
+/** Every load on one branch, spaced so they read as a train rather than a pile. */
+function Cargo({
+  kinds,
+  delayMs = 0,
+}: {
+  kinds?: readonly CargoKind[];
+  delayMs?: number;
+}) {
+  if (!kinds) return null;
+
+  return (
+    <>
+      {kinds.map((kind, index) => (
+        <TravellingCargo key={kind} kind={kind} delayMs={delayMs + index * 420} />
+      ))}
+    </>
   );
 }
 
@@ -99,17 +178,17 @@ function TravellingFolder({ delayMs = 0 }: { delayMs?: number }) {
  *
  * `flowing` turns the line accent-coloured once the node above it has
  * finished, so the eye can follow how far down the tree the work has already
- * been. `travelling` is the live half of that: a folder drops down this exact
+ * been. `carrying` is the live half of that: a load drops down this exact
  * branch while the agent below it is actually working, so the motion marks a
  * real handoff rather than decorating the whole screen at once.
  */
 function Trunk({
   flowing,
-  travelling = false,
+  carrying,
   className,
 }: {
   flowing: boolean;
-  travelling?: boolean;
+  carrying?: readonly CargoKind[];
   className?: string;
 }) {
   return (
@@ -123,7 +202,7 @@ function Trunk({
           flowing ? "bg-accent" : "bg-hairline",
         )}
       />
-      {travelling ? <TravellingFolder /> : null}
+      <Cargo kinds={carrying} />
     </div>
   );
 }
@@ -137,10 +216,10 @@ function Trunk({
  */
 function Fanout({
   flowing,
-  travelling = false,
+  carrying,
 }: {
   flowing: boolean;
-  travelling?: boolean;
+  carrying?: readonly CargoKind[];
 }) {
   const line = flowing ? "bg-accent" : "bg-hairline";
   const border = flowing ? "border-accent" : "border-hairline";
@@ -150,7 +229,7 @@ function Fanout({
       {/* Trunk down from the planner to the crossbar. */}
       <div className="relative flex h-8 justify-center overflow-hidden">
         <span className={cn("w-px transition-colors duration-500", line)} />
-        {travelling ? <TravellingFolder /> : null}
+        <Cargo kinds={carrying} />
       </div>
 
       {/* Crossbar spanning the three column centres, with a drop into each. */}
@@ -172,9 +251,9 @@ function Fanout({
                 line,
               )}
             />
-            {/* Staggered, so the three read as one folder copied down each
+            {/* Staggered, so the three read as one load copied down each
                 branch rather than three sprites marching in lockstep. */}
-            {travelling ? <TravellingFolder delayMs={column * 260} /> : null}
+            <Cargo kinds={carrying} delayMs={column * 260} />
           </div>
         ))}
       </div>
@@ -230,35 +309,14 @@ export function AnalysisStage({
 }) {
   const storageState = traceState(storageSteps);
 
-  /**
-   * Which branch is carrying work right now.
-   *
-   * A branch animates only when the node above it has finished and the node
-   * below it is running — i.e. during the handoff the branch actually
-   * represents. Animating every branch for the whole run would make the motion
-   * ambient decoration; tying it to the real transition means the folder is
-   * always somewhere true.
-   */
-  const carrying = {
-    toParser: storageState === "done" && agentState.parser === "running",
-    toPlanner: agentState.parser === "done" && agentState.planner === "running",
-    toSpecialists:
-      agentState.planner === "done" &&
-      SPECIALISTS.some((agent) => agentState[agent] === "running"),
-  };
+  const carrying = edgeCargo(phase, Boolean(error));
 
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
-      <SectionLabel>Step 3</SectionLabel>
+      <SectionLabel>Step 2</SectionLabel>
       <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
         Your resume, moving down the line
       </h1>
-      <p className="mt-2 max-w-2xl text-[14.5px] leading-relaxed text-ink-2">
-        It is stored first, then the parser reads it into a structured profile.
-        That profile is the planner&apos;s only input — and the planner&apos;s
-        output is what the last three agents work from, all at once.
-      </p>
-
       {/* The pipeline as a loading screen: three clerks passing one document. */}
       {!error ? (
         <RetroOfficeLoader
@@ -269,8 +327,6 @@ export function AnalysisStage({
           className="mt-6"
         />
       ) : null}
-
-      {storedResume ? <StoredReceipt resume={storedResume} /> : null}
 
       {error ? (
         <div
@@ -298,7 +354,7 @@ export function AnalysisStage({
 
         <Trunk
           flowing={storageState === "done"}
-          travelling={carrying.toParser}
+          carrying={carrying.toParser}
           className="h-14"
         />
 
@@ -310,7 +366,7 @@ export function AnalysisStage({
 
         <Trunk
           flowing={agentState.parser === "done"}
-          travelling={carrying.toPlanner}
+          carrying={carrying.toPlanner}
           className="h-14"
         />
 
@@ -322,7 +378,7 @@ export function AnalysisStage({
 
         <Fanout
           flowing={agentState.planner === "done"}
-          travelling={carrying.toSpecialists}
+          carrying={carrying.toSpecialists}
         />
 
         {/* Stacked on mobile, so the fan-out cannot be drawn — say it. */}

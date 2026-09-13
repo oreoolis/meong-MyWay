@@ -50,6 +50,18 @@ const CLERK = [
 
 const DESK = ["DDDDDDDD", "DDDDDDDD", ".L....L.", ".L....L."];
 
+/**
+ * One colour per desk, shared by the clerk who sits at it and by the work it
+ * hands on. Named here rather than inline in `STATIONS` so the two can never
+ * drift: the tie between a load and its maker is the colour.
+ */
+const STATION_COLOUR = {
+  store: "#f2b134",
+  parser: "#4de0c8",
+  planner: "#c58bf2",
+  specialists: "#f28b82",
+} as const;
+
 /** A sheet of paper with ruled lines: the work being passed along. */
 const DOCUMENT = [
   "WWWWWWW",
@@ -127,15 +139,76 @@ function PixelGrid({
   );
 }
 
+/* -------------------------------------------------------------------------
+ * Cargo
+ *
+ * What moves between the stations, and it is not the same thing throughout.
+ * A folder leaves the filing cabinet, but what leaves the parser is a vector
+ * and a pile of extracted fields, and what leaves the planner is a plan. The
+ * tree draws the real handoff, so the sprite has to change with it — a folder
+ * still being carried into the advisors would be claiming the document goes
+ * all the way down, when nothing past the parser ever sees the PDF.
+ * ---------------------------------------------------------------------- */
+
+/** A binary `01`: the document, after the parser turned it into data. */
+const BITS = [
+  ".S...S..",
+  "S.S.SS..",
+  "S.S..S..",
+  "S.S..S..",
+  ".S..SSS.",
+];
+
+/** A bracketed row of values: the embedding the four agents downstream read. */
+const VECTOR = [
+  "SS....SS",
+  "S......S",
+  "S.SSSS.S",
+  "S......S",
+  "SS....SS",
+];
+
+/** A ruled card: the planner's output, which is what the specialists work on. */
+const PLAN = [
+  "SSSSSSS.",
+  "S.....S.",
+  "S.SSS.S.",
+  "S.SS..S.",
+  "SSSSSSS.",
+];
+
+export type CargoKind = "file" | "bits" | "vector" | "plan";
+
 /**
- * The travelling folder, for callers outside this screen.
+ * Each load takes the colour of the desk that produced it, which is the whole
+ * trick: the teal leaving the parser is the parser's own teal, so the eye ties
+ * the thing moving to the clerk who made it without anything being labelled.
+ * The folder is the exception — manila is manila, and it is the one load that
+ * arrives rather than being produced here.
+ */
+const CARGO: Record<CargoKind, { rows: string[]; tint?: string }> = {
+  file: { rows: FOLDER },
+  bits: { rows: BITS, tint: STATION_COLOUR.parser },
+  vector: { rows: VECTOR, tint: STATION_COLOUR.parser },
+  plan: { rows: PLAN, tint: STATION_COLOUR.planner },
+};
+
+/**
+ * One load in transit, for callers outside this screen.
  *
  * Deliberately just the sprite: the motion belongs to whatever is moving it,
  * because the tree animates a drop down a branch while the loader slides one
  * across a floor.
  */
-export function PixelFolder({ cell = 3 }: { cell?: number }) {
-  return <PixelGrid rows={FOLDER} cell={cell} />;
+export function PixelCargo({
+  kind = "file",
+  cell = 3,
+}: {
+  kind?: CargoKind;
+  cell?: number;
+}) {
+  const { rows, tint } = CARGO[kind];
+  return <PixelGrid rows={rows} cell={cell} shirt={tint} />;
 }
 
 /* -------------------------------------------------------------------------
@@ -155,10 +228,15 @@ type Station = {
 // swapper), which run together, so one desk represents the fan-out rather
 // than pretending they are sequential.
 const STATIONS: Station[] = [
-  { id: "store", name: "FILING", deskLabel: "S3 + DYNAMO", shirt: "#f2b134" },
-  { id: "parser", name: "PARSER", deskLabel: "READ + EMBED", shirt: "#4de0c8" },
-  { id: "planner", name: "PLANNER", deskLabel: "MATCH PATHS", shirt: "#c58bf2" },
-  { id: "specialists", name: "ADVISORS", deskLabel: "SKILLS FRAMEWORK", shirt: "#f28b82" },
+  { id: "store", name: "FILING", deskLabel: "S3 + DYNAMO", shirt: STATION_COLOUR.store },
+  { id: "parser", name: "PARSER", deskLabel: "READ + EMBED", shirt: STATION_COLOUR.parser },
+  { id: "planner", name: "PLANNER", deskLabel: "MATCH PATHS", shirt: STATION_COLOUR.planner },
+  {
+    id: "specialists",
+    name: "ADVISORS",
+    deskLabel: "SKILLS FRAMEWORK",
+    shirt: STATION_COLOUR.specialists,
+  },
 ];
 
 /** Which desk is holding the work, and whether it is mid-flight to the next. */
