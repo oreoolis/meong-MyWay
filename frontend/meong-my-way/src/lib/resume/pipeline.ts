@@ -1,32 +1,22 @@
 "use client";
 
 import type { AgentId, AgentStep, AnalysisBundle } from "@/lib/contracts";
-import { runAnalysis } from "@/lib/analysis/client";
+import { requestResumeIntake, runAnalysis } from "@/lib/analysis/client";
+import type { IntakeResponse, QuestionnaireSubmission } from "./questionnaire-types";
 import { sleep } from "@/lib/utils";
 
 import { uploadResume } from "./client";
 import type { StoredResume } from "./types";
 
-/**
- * The end-to-end run: store the resume, then let the agents work on it.
- *
- * Ordering follows the architecture diagram — nothing reaches an agent until
- * the resume and its metadata are stored — but the enforcement now lives on
- * the server, in `lib/agents/orchestrator.ts`. This module is only the
- * browser's half: it does the upload, kicks off the run, and narrates it.
- *
- * The narration is genuinely approximate. `/api/analysis` is a single request
- * that returns once, so the per-agent steps below are advanced on a timer
- * rather than by real progress events. They are labelled with what each agent
- * actually does and settle into their true final state when the response
- * lands; if that fidelity ever stops being enough, the fix is to stream the
- * orchestrator's `onProgress` events over SSE and drive these from them.
- */
+/** Browser orchestration, driven by server phase events. */
 
 export type PipelinePhase =
   | "uploading"
   | "stored"
   | "parsing"
+  | "context"
+  | "answering"
+  | "embedding"
   | "handoff"
   | "planning"
   | "specialists"
@@ -35,6 +25,8 @@ export type PipelinePhase =
 export type StorageStepKey = "transfer" | "persist" | "index";
 
 export type PipelineEvents = {
+  onIntake: (intake: IntakeResponse) => void;
+  onQuestionnaire: (intake: IntakeResponse) => Promise<QuestionnaireSubmission>;
   onAgentSteps: (agent: AgentId, steps: AgentStep[]) => void;
   onStorageSteps: (steps: AgentStep[]) => void;
   onPhase: (phase: PipelinePhase) => void;
@@ -46,6 +38,7 @@ export type PipelineResult = {
   resume: StoredResume;
   analysis: AnalysisBundle;
 };
+export type PipelineCache = { resume?: StoredResume; intake?: IntakeResponse; submission?: QuestionnaireSubmission };
 
 const STORAGE_LABELS: Record<StorageStepKey, string> = {
   transfer: "Uploading to S3",
@@ -61,6 +54,9 @@ const AGENT_STEPS: Record<AgentId, { key: string; label: string }[]> = {
     { key: "read", label: "Reading the document" },
     { key: "extract", label: "Extracting skills and experience" },
     { key: "embed", label: "Generating embeddings" },
+  ],
+  context: [
+    { key: "questions", label: "Selecting and reviewing missing-evidence questions" },
   ],
   planner: [
     { key: "sectors", label: "Loading the Skills Framework taxonomy" },
@@ -84,7 +80,7 @@ const AGENT_STEPS: Record<AgentId, { key: string; label: string }[]> = {
  * The swapper has its own endpoint and is started from the results screen, so
  * it is deliberately absent — see `lib/agents/orchestrator.ts` for why.
  */
-const NARRATED_AGENTS: AgentId[] = ["parser", "planner", "improver", "advisor"];
+const NARRATED_AGENTS: AgentId[] = ["parser", "context", "planner", "improver", "advisor"];
 
 function storageSteps(
   completed: Partial<Record<StorageStepKey, string>>,
@@ -106,55 +102,6 @@ function agentSteps(agent: AgentId, doneCount: number): AgentStep[] {
   }));
 }
 
-/**
- * Walk an agent's steps forward on a timer until `until` settles.
- *
- * Stops one step short of complete, so the final step only turns green once
- * the server has actually answered — the UI never claims a finished agent
- * before there is a result behind it.
- *
- * Settling is raced against the timer rather than checked after it. Waiting
- * out the current tick first would leave a step advancing up to 1.4s after the
- * run it belongs to was already over, which is the whole of the lie this
- * module is trying not to tell.
- */
-async function narrate(
-  agent: AgentId,
-  events: PipelineEvents,
-  until: Promise<unknown>,
-  signal: AbortSignal,
-): Promise<void> {
-  const steps = AGENT_STEPS[agent];
-  let done = 0;
-  let settled = false;
-
-  // Resolves either way: a failed run has to stop the narration exactly as a
-  // finished one does, and the caller is the one that decides which it was.
-  const stop = until.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-
-  events.onAgentSteps(agent, agentSteps(agent, 0));
-
-  while (!settled && done < steps.length - 1 && !signal.aborted) {
-    const tick = sleep(1400, signal);
-    // Losing the race leaves this pending, and an abort would then reject a
-    // promise nothing is waiting on. Claimed here so it is never unhandled;
-    // the race still sees the rejection and propagates it.
-    void tick.catch(() => {});
-
-    await Promise.race([tick, stop]);
-    if (settled || signal.aborted) break;
-    done += 1;
-    events.onAgentSteps(agent, agentSteps(agent, done));
-  }
-}
-
 /** Mark every step of an agent complete. */
 function completeAgent(agent: AgentId, events: PipelineEvents): void {
   events.onAgentSteps(
@@ -173,6 +120,7 @@ export async function runResumePipeline(
   file: File,
   events: PipelineEvents,
   signal: AbortSignal,
+  cache: PipelineCache = {},
 ): Promise<PipelineResult> {
   const done: Partial<Record<StorageStepKey, string>> = {};
 
@@ -181,7 +129,10 @@ export async function runResumePipeline(
   events.onPhase("uploading");
   events.onStorageSteps(storageSteps(done, "transfer"));
 
-  const { resume, replacedResumeId } = await uploadResume(file, signal);
+  const { resume, replacedResumeId } = cache.resume
+    ? { resume: cache.resume, replacedResumeId: null }
+    : await uploadResume(file, signal);
+  cache.resume = resume;
 
   done.transfer = `${resume.format.toUpperCase()} · ${(resume.sizeBytes / 1024).toFixed(0)} KB`;
   events.onStorageSteps(storageSteps(done, "persist"));
@@ -201,59 +152,42 @@ export async function runResumePipeline(
 
   /* --- The agents ------------------------------------------------------- */
 
-  // One request drives all five. Started before the narration so the clock on
-  // the server begins immediately rather than after the first animated step.
-  const run = runAnalysis(signal);
-
-  // Watched for failure, not only for completion.
-  //
-  // The narration below is a script, not a progress feed: it walks each agent
-  // forward on its own and only stops when the request settles. So a run the
-  // server has already abandoned — a document that turned out not to be a
-  // resume dies in the parser, the first agent of five — would otherwise go on
-  // to announce the planner, then the improver and the advisor, lighting up
-  // three more cards and several seconds of a pipeline that is not running.
-  //
-  // Whatever the screen says after that point is false. The rejection is
-  // caught the moment it lands and thrown at the next seam, so the run stops
-  // on the agent that actually failed.
-  let failed = false;
-  let failure: unknown;
-  void run.catch((error: unknown) => {
-    failed = true;
-    failure = error;
-  });
-
-  /** Give up here rather than narrating the next agent. */
-  function stopIfFailed(): void {
-    if (failed) throw failure;
-  }
-
-  events.onPhase("parsing");
-  await narrate("parser", events, run, signal);
-  stopIfFailed();
-
-  events.onPhase("handoff");
-  await narrate("planner", events, run, signal);
-  stopIfFailed();
-
-  events.onPhase("specialists");
-  await Promise.all([
-    narrate("improver", events, run, signal),
-    narrate("advisor", events, run, signal),
-  ]);
-  stopIfFailed();
-
-  const analysis = await run;
-
-  // The swapper is excluded on both counts. It is not part of this request —
-  // the results screen starts it once it is up — so narrating it would show
-  // work that is not happening, and completing it would claim a result that
-  // does not exist yet. Left untouched, its card stays on "Queued", which is
-  // exactly what it is.
-  for (const agent of NARRATED_AGENTS) {
-    completeAgent(agent, events);
-  }
+  const reportPhase = (phase: import("@/lib/analysis/progress").AnalysisPhase) => {
+    if (signal.aborted || phase === "complete") return;
+    events.onPhase(phase);
+    if (phase === "parsing") events.onAgentSteps("parser", agentSteps("parser", 0));
+    if (phase === "context") {
+      events.onAgentSteps("parser", AGENT_STEPS.parser.map(step => ({ ...step, status: step.key === "embed" ? "pending" : "done" })));
+      events.onAgentSteps("context", agentSteps("context", 0));
+    }
+    if (phase === "embedding") events.onAgentSteps("parser", agentSteps("parser", 2));
+    if (phase === "planning") {
+      completeAgent("parser", events);
+      events.onAgentSteps("planner", agentSteps("planner", 0));
+    }
+    if (phase === "specialists") {
+      completeAgent("planner", events);
+      events.onAgentSteps("improver", agentSteps("improver", 0));
+      events.onAgentSteps("advisor", agentSteps("advisor", 0));
+    }
+  };
+  reportPhase("parsing");
+  const intake = cache.intake ?? await requestResumeIntake(resume.resumeId, signal, reportPhase);
+  signal.throwIfAborted();
+  cache.intake = intake;
+  events.onAgentSteps("parser", AGENT_STEPS.parser.map(step => ({ ...step, status: step.key === "embed" ? "pending" : "done" })));
+  completeAgent("context", events);
+  events.onIntake(intake);
+  events.onPhase("answering");
+  const submission = cache.submission ?? (intake.questionnaire.questions.length
+    ? await events.onQuestionnaire(intake)
+    : { intakeId: intake.questionnaire.intakeId, resumeId: resume.resumeId, version: 1 as const, selections: [] });
+  signal.throwIfAborted();
+  cache.submission = submission;
+  reportPhase("embedding");
+  const analysis = await runAnalysis(signal, submission, reportPhase);
+  signal.throwIfAborted();
+  for (const agent of NARRATED_AGENTS) completeAgent(agent, events);
 
   events.onAnalysis(analysis);
   events.onPhase("complete");

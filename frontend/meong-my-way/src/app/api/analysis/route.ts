@@ -1,8 +1,10 @@
+import { progressResponse } from "@/lib/analysis/progress";
 import { AwsConfigurationError } from "@/lib/aws/clients";
 import { authJson, authenticateRequest } from "@/lib/auth/route-guard";
 import { AgentReasoningError } from "@/lib/bedrock/reason";
-import { runAnalysis } from "@/lib/agents/orchestrator";
-import { deleteAnalysis, getAnalysis } from "@/lib/agents/store";
+import { completeIntake } from "@/lib/resume/intake";
+import { QuestionnaireError } from "@/lib/resume/questionnaire";
+import { getAnalysis } from "@/lib/agents/store";
 import { DocumentRejectedError } from "@/lib/resume/file-policy";
 import { getResume } from "@/lib/resume/store";
 
@@ -12,10 +14,9 @@ import { getResume } from "@/lib/resume/store";
  *   GET  — whatever the last run stored, or `{ analysis: null }`
  *   POST — run the pipeline against the currently stored resume
  *
- * POST takes no body. The resume it analyses is whichever one the caller has
- * on file, looked up by their verified Cognito `sub` — so a caller cannot
- * point the agents at anyone else's document, and cannot smuggle in a file
- * that never passed the upload route's format checks.
+ * POST accepts a QuestionnaireSubmission containing intake/resume/version and
+ * selected IDs only. The stored intake supplies all evidence; the verified
+ * Cognito sub is the only source of user identity. Completed submissions replay.
  */
 
 export const runtime = "nodejs";
@@ -43,7 +44,9 @@ export async function GET(request: Request) {
   if (!auth.ok) return auth.response;
 
   try {
-    const analysis = await getAnalysis(auth.caller.userId);
+    const stored = await getAnalysis(auth.caller.userId);
+    const { intake, ...analysis } = stored;
+    void intake; // Never expose server-side option evidence or leases.
     // An empty partition means nothing has been run, which is a normal state
     // rather than a missing resource.
     return authJson(
@@ -63,47 +66,47 @@ export async function POST(request: Request) {
   const auth = await authenticateRequest(request);
   if (!auth.ok) return auth.response;
 
-  try {
-    const resume = await getResume(auth.caller.userId);
-    if (!resume) {
-      return authJson({ error: "Upload a resume before running the agents." }, 409);
+  return progressResponse(request, async report => {
+    try {
+      const resume = await getResume(auth.caller.userId);
+      if (!resume) {
+        return authJson({ error: "Upload a resume before running the agents." }, 409);
+      }
+
+      let submission: unknown;
+      try { submission = await request.json(); } catch { return authJson({ error: "Expected questionnaire selections." }, 400); }
+      const analysis = await (report ? completeIntake(auth.caller.userId, submission, report) : completeIntake(auth.caller.userId, submission));
+      return authJson({ analysis }, 201);
+    } catch (error) {
+      if (error instanceof QuestionnaireError) return authJson({ error: error.message, retryable: error.status === 409 }, error.status);
+      const configured = configurationErrorResponse(error);
+      if (configured) return configured;
+
+      // The document was read and found wanting — not a resume, or unreadable.
+      // Nothing is wrong with the run, so this is not a 5xx and not retryable:
+      // the same file will be rejected the same way every time. The caller's
+      // message says so, and the UI puts it back beside the file picker.
+      if (error instanceof DocumentRejectedError) {
+        console.warn("[api/analysis] rejected the stored document:", error.message);
+        return authJson(
+          { error: error.message, kind: "document-rejected", retryable: false },
+          422,
+        );
+      }
+
+      // A model failure is worth distinguishing: it is usually transient
+      // (throttling, a malformed reply) and retrying often succeeds, whereas a
+      // 500 reads as permanent.
+      if (error instanceof AgentReasoningError) {
+        console.error(`[api/analysis] ${error.agent} agent failed:`, error.cause);
+        return authJson(
+          { error: "The agents could not finish this run. Try again.", retryable: true },
+          502,
+        );
+      }
+
+      console.error("[api/analysis] POST failed:", error);
+      return authJson({ error: "Could not analyse your resume." }, 500);
     }
-
-    // Clear the previous run first. Without this a partial failure would leave
-    // the new profile sitting beside the old plan, and the results screen
-    // cannot tell the two apart.
-    await deleteAnalysis(auth.caller.userId);
-
-    const analysis = await runAnalysis(resume);
-    return authJson({ analysis }, 201);
-  } catch (error) {
-    const configured = configurationErrorResponse(error);
-    if (configured) return configured;
-
-    // The document was read and found wanting — not a resume, or unreadable.
-    // Nothing is wrong with the run, so this is not a 5xx and not retryable:
-    // the same file will be rejected the same way every time. The caller's
-    // message says so, and the UI puts it back beside the file picker.
-    if (error instanceof DocumentRejectedError) {
-      console.warn("[api/analysis] rejected the stored document:", error.message);
-      return authJson(
-        { error: error.message, kind: "document-rejected", retryable: false },
-        422,
-      );
-    }
-
-    // A model failure is worth distinguishing: it is usually transient
-    // (throttling, a malformed reply) and retrying often succeeds, whereas a
-    // 500 reads as permanent.
-    if (error instanceof AgentReasoningError) {
-      console.error(`[api/analysis] ${error.agent} agent failed:`, error.cause);
-      return authJson(
-        { error: "The agents could not finish this run. Try again.", retryable: true },
-        502,
-      );
-    }
-
-    console.error("[api/analysis] POST failed:", error);
-    return authJson({ error: "Could not analyse your resume." }, 500);
-  }
+  });
 }

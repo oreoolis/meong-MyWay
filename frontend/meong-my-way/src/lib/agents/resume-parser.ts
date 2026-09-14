@@ -8,12 +8,15 @@ import {
   resumeContentProblem,
 } from "@/lib/resume/file-policy";
 import type { StoredResume } from "@/lib/resume/types";
+import type { ParsedResume, QuestionnaireEvidence } from "@/lib/resume/questionnaire-types";
+import { enrichedEmbeddingText } from "@/lib/resume/questionnaire";
 
 /**
  * Agent 1 — Resume Parser.
  *
- * Reads the uploaded PDF/DOCX and produces two things: a structured profile,
- * and a vector for the four agents downstream.
+ * Intake reads the PDF/DOCX into a structured profile and base embedding text.
+ * Only after optional questions are answered does embedParsedResume produce
+ * the vector used downstream. parseResume remains a résumé-only wrapper.
  *
  * The document goes to Bedrock as a `document` content block, so the model
  * does the text extraction. That is the reason this project has no pdf-parse
@@ -34,6 +37,7 @@ import type { StoredResume } from "@/lib/resume/types";
 const SYSTEM = `You extract structured data from resumes. You are precise and you never invent facts.
 
 Rules:
+- Keep factual evidence separate from preferences. Never turn desired roles, interests, salary, location preferences or constraints into skills or capability. Exclude those preferences from embeddingText.
 - First decide what the document actually is. A resume or CV describes one person's own work history. A report, invoice, article, form, contract, job advert, or company profile is not a resume, however professional it looks.
 - If it is not a resume, set "documentKind" to "other", describe what it is instead in "documentSummary" in under eight words, and leave every other field empty. Do not attempt an extraction.
 - Use only what the document states. If a field is absent, use an empty string, an empty array, or 0.
@@ -152,10 +156,10 @@ function synthesiseEmbeddingText(payload: ParserPayload): string {
     .join("\n");
 }
 
-export async function parseResume(
+export async function parseResumeProfile(
   resume: StoredResume,
   bytes: Uint8Array,
-): Promise<ParseResult> {
+): Promise<ParsedResume> {
   const { value, usage } = await reasonJson<ParserPayload>({
     agent: "parser",
     system: SYSTEM,
@@ -184,9 +188,8 @@ export async function parseResume(
 
   const embeddingText =
     value.embeddingText?.trim() || synthesiseEmbeddingText(value);
-  const embedding = await embedResumeText(embeddingText);
 
-  const profile: ResumeProfile = {
+  const profile: ParsedResume["profile"] = {
     candidateName: value.candidateName?.trim() || "Unnamed candidate",
     headline: value.headline?.trim() || "",
     location: value.location?.trim() || "",
@@ -196,16 +199,6 @@ export async function parseResume(
     experience: value.experience ?? [],
     education: value.education ?? [],
     certifications: value.certifications ?? [],
-    embedding: {
-      model: embedding.model,
-      dimensions: embedding.dimensions,
-      // One vector over the whole resume: at ~500 tokens a resume sits well
-      // inside Titan's window, so chunking would add cost and lose the
-      // cross-section context that makes the match meaningful.
-      chunks: 1,
-      tokensProcessed: embedding.inputTokens,
-      vectorPreview: embedding.vector.slice(0, 8),
-    },
     // The file facts come from the stored record, never from the model —
     // asking it to read its own byte count invites a confident wrong number.
     source: {
@@ -215,5 +208,21 @@ export async function parseResume(
     },
   };
 
-  return { profile, embedding, embeddingText, usage };
+  return { profile, embeddingText, usage };
+}
+
+/** The intake profile stays immutable; self-reported evidence has its own provenance. */
+export async function embedParsedResume(parsed: ParsedResume, evidence: QuestionnaireEvidence[] = []): Promise<ParseResult> {
+  const embeddingText = enrichedEmbeddingText(parsed.embeddingText, evidence);
+  const embedding = await embedResumeText(embeddingText);
+  const profile: ResumeProfile = { ...parsed.profile,
+    ...(evidence.length ? { questionnaireEvidence: evidence } : {}),
+    embedding: { model: embedding.model, dimensions: embedding.dimensions, chunks: 1, tokensProcessed: embedding.inputTokens, vectorPreview: embedding.vector.slice(0, 8) },
+  };
+  return { profile, embedding, embeddingText, usage: parsed.usage };
+}
+
+/** Résumé-only compatibility for offline/integration callers. HTTP uses persisted intake. */
+export async function parseResume(resume: StoredResume, bytes: Uint8Array): Promise<ParseResult> {
+  return embedParsedResume(await parseResumeProfile(resume, bytes));
 }

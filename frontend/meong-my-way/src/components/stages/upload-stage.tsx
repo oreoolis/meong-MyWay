@@ -99,7 +99,7 @@ export function UploadStage({
       <section className="flex flex-1 items-center justify-center px-5 py-12 sm:px-8">
         <div className="w-full max-w-md">
           <div className="mw-rise">
-            <SectionLabel>Step 1 of 3</SectionLabel>
+            <SectionLabel>Step 1 of 4</SectionLabel>
             <h1 className="mt-2 text-[30px] font-semibold leading-[1.15] tracking-tight text-ink sm:text-[34px]">
               {replacing ? "Replace your resume" : "Upload your resume"}
             </h1>

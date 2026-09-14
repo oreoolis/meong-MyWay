@@ -35,7 +35,7 @@ export async function getResume(userId: string): Promise<StoredResume | null> {
   const { resumesTable } = getStorageConfig();
 
   const { Item } = await getDocumentClient().send(
-    new GetCommand({ TableName: resumesTable, Key: { userId } }),
+    new GetCommand({ TableName: resumesTable, Key: { userId }, ConsistentRead: true }),
   );
 
   return (Item as StoredResume | undefined) ?? null;
@@ -107,13 +107,14 @@ export async function putResume(input: {
 }
 
 /** Remove the stored resume entirely. No-op when there is nothing stored. */
-export async function deleteResume(userId: string): Promise<boolean> {
+export async function deleteResume(userId: string, expectedResumeId?: string): Promise<boolean> {
   const { bucket, resumesTable } = getStorageConfig();
   const existing = await getResume(userId);
   if (!existing) return false;
+  if (expectedResumeId && expectedResumeId !== existing.resumeId) throw new Error("The résumé changed during deletion. Try again.");
 
   await getDocumentClient().send(
-    new DeleteCommand({ TableName: resumesTable, Key: { userId } }),
+    new DeleteCommand({ TableName: resumesTable, Key: { userId }, ConditionExpression: "resumeId = :r", ExpressionAttributeValues: { ":r": existing.resumeId } }),
   );
 
   try {

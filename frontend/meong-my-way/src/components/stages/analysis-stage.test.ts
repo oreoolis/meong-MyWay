@@ -18,6 +18,9 @@ const PHASES: PipelinePhase[] = [
   "uploading",
   "stored",
   "parsing",
+  "context",
+  "answering",
+  "embedding",
   "handoff",
   "planning",
   "specialists",
@@ -32,9 +35,14 @@ function moving(phase: PipelinePhase, stopped = false): string[] {
 }
 
 describe("edgeCargo", () => {
-  it("moves the file down the first edge while the parser reads it", () => {
+  it("moves the stored résumé to the parser", () => {
     expect(edgeCargo("parsing", false).toParser).toEqual(["file"]);
     expect(moving("parsing")).toEqual(["toParser"]);
+  });
+
+  it("moves the parsed profile to the questionnaire agent", () => {
+    expect(edgeCargo("context", false).toQuestionnaire).toEqual(["bits"]);
+    expect(moving("context")).toEqual(["toQuestionnaire"]);
   });
 
   it("moves what the parser made, not the file, once the planner has it", () => {
@@ -51,18 +59,19 @@ describe("edgeCargo", () => {
     expect(edgeCargo("planning", false).toPlanner).toEqual(["bits", "vector"]);
   });
 
-  it("moves the plan down the fan-out to the specialists", () => {
-    expect(edgeCargo("specialists", false).toSpecialists).toEqual(["plan"]);
-    expect(moving("specialists")).toEqual(["toSpecialists"]);
+  it("fans the plan out during downstream analysis", () => {
+    expect(edgeCargo("specialists", false).toDownstream).toEqual(["plan"]);
+    expect(moving("specialists")).toEqual(["toDownstream"]);
   });
 
   it("never carries the document past the parser", () => {
     // Nothing after the parser reads the PDF, so a folder down there would be
     // drawing a handoff that does not happen.
     for (const phase of PHASES) {
-      const { toPlanner, toSpecialists } = edgeCargo(phase, false);
+      const { toQuestionnaire, toPlanner, toDownstream } = edgeCargo(phase, false);
+      expect(toQuestionnaire ?? []).not.toContain("file");
       expect(toPlanner ?? []).not.toContain("file");
-      expect(toSpecialists ?? []).not.toContain("file");
+      expect(toDownstream ?? []).not.toContain("file");
     }
   });
 
@@ -74,7 +83,7 @@ describe("edgeCargo", () => {
 
   it("reaches every edge across the run, so none is left stuck", () => {
     const reached = new Set(PHASES.flatMap((phase) => moving(phase)));
-    expect(reached).toEqual(new Set(["toParser", "toPlanner", "toSpecialists"]));
+    expect(reached).toEqual(new Set(["toParser", "toQuestionnaire", "toPlanner", "toDownstream"]));
   });
 
   it("stands still before the agents start and after they finish", () => {

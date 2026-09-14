@@ -107,11 +107,7 @@ export async function POST(request: Request) {
       contentType: RESUME_FORMATS[format].mimeTypes[0],
       bytes,
     });
-
-    // New file, old analysis void. Kill stale rows so read-back never shows
-    // results for resume no longer stored.
-    await deleteAnalysis(auth.caller.userId);
-
+    if (result.replacedResumeId) await deleteAnalysis(auth.caller.userId, result.replacedResumeId);
     return authJson(result, 201);
   } catch (error) {
     const configured = configurationErrorResponse(error);
@@ -127,9 +123,9 @@ export async function DELETE(request: Request) {
   if (!auth.ok) return auth.response;
 
   try {
-    const deleted = await deleteResume(auth.caller.userId);
-    // No resume left for the analysis to belong to.
-    await deleteAnalysis(auth.caller.userId);
+    const previous = await getResume(auth.caller.userId);
+    const deleted = previous ? await deleteResume(auth.caller.userId, previous.resumeId) : false;
+    if (previous) await deleteAnalysis(auth.caller.userId, previous.resumeId);
     return authJson({ deleted }, 200);
   } catch (error) {
     const configured = configurationErrorResponse(error);
