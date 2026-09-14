@@ -32,8 +32,6 @@ export function normaliseQuestions(raw: unknown, parsed: Pick<ParsedResume, "pro
     if (!anchor || anchor.length > 100 || /[\n\r{}<>]|\b(want|desired|aspiring|ignore|instructions|perfect|expert)\b/i.test(anchor)) continue;
     const key = facet === "scope" ? "project-scope" : clean(anchor);
     if (used.has(key)) continue;
-    // Demonstrated skill use already answers the proficiency question.
-    if (facet === "proficiency" && skill.confidence > 0.5) continue;
     let prompt: string;
     let labels: string[];
     let evidenceStatements: string[];
@@ -66,13 +64,21 @@ export function normaliseQuestions(raw: unknown, parsed: Pick<ParsedResume, "pro
       evidenceStatements = [`As ${anchor}, I contributed individually without coordinating others.`, `As ${anchor}, I coordinated one team on one project.`, `As ${anchor}, I coordinated multiple teams on one project.`, `As ${anchor}, I coordinated work across multiple projects.`];
     }
     used.add(key);
-    questions.push({ id: randomUUID(), prompt, reference: anchor, options: [
-      ...labels.map((label, optionIndex) => ({ id: randomUUID(), label, evidence: evidenceStatements[optionIndex], contributesEvidence: true, category: facet })),
-      { id: randomUUID(), label: "Skip", evidence: "", contributesEvidence: false },
-    ] });
+    questions.push({
+      id: randomUUID(),
+      prompt,
+      reference: anchor,
+      options: labels.map((label, optionIndex) => ({
+        id: randomUUID(),
+        label,
+        evidence: evidenceStatements[optionIndex],
+        contributesEvidence: true,
+        category: facet,
+      })),
+    });
     if (questions.length === 3) break;
   }
-  return questions.length >= 2 ? questions : [];
+  return questions;
 }
 
 export function publicQuestionnaire(q: ResumeQuestionnaire): PublicQuestionnaire {

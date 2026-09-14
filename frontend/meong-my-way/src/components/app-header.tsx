@@ -6,7 +6,7 @@ import { SparkIcon } from "@/components/ui/icons";
 
 export const STEPS: StepperItem[] = [
   { key: "upload", label: "Upload" },
-  { key: "questionnaire", label: "Context" },
+  { key: "questionnaire", label: "Questionnaire" },
   { key: "analysis", label: "Analysis" },
   { key: "results", label: "Results" },
 ];

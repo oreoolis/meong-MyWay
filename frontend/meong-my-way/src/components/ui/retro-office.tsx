@@ -228,7 +228,6 @@ const CONTEXT_STATIONS: Station[] = [
   { id: "store", name: "FILING", deskLabel: "S3 + DYNAMO", shirt: STATION_COLOUR.store },
   { id: "parser", name: "RESUME PARSER", deskLabel: "PROFILE + EMBEDDING", shirt: STATION_COLOUR.parser },
   { id: "questionnaire", name: "QUESTIONNAIRE AGENT", deskLabel: "SELECT + REVIEW", shirt: "#f2b134" },
-  { id: "planner", name: "CAREER PLANNER", deskLabel: "MATCH PATHS", shirt: STATION_COLOUR.planner },
 ];
 
 const ANALYSIS_STATIONS: Station[] = [
@@ -247,9 +246,9 @@ const CONTEXT_PHASE_POSITION: Record<PipelinePhase, { station: number; inTransit
   answering: { station: 2, inTransit: false, progress: 50 },
   embedding: { station: 2, inTransit: true, progress: 60 },
   handoff: { station: 2, inTransit: true, progress: 68 },
-  planning: { station: 3, inTransit: false, progress: 76 },
-  specialists: { station: 3, inTransit: false, progress: 90 },
-  complete: { station: 3, inTransit: false, progress: 100 },
+  planning: { station: 2, inTransit: false, progress: 76 },
+  specialists: { station: 2, inTransit: false, progress: 90 },
+  complete: { station: 2, inTransit: false, progress: 100 },
 };
 
 const ANALYSIS_PHASE_POSITION: Record<PipelinePhase, { station: number; inTransit: boolean; progress: number }> = {
@@ -356,7 +355,10 @@ export function RetroOfficeLoader({
         {/* The route the work travels, behind the sprites. */}
         <div
           aria-hidden="true"
-          className="absolute left-[12.5%] right-[12.5%] top-[26px] border-t-2 border-dashed border-[#2b1f3d]"
+          className={cn(
+            "absolute top-[26px] border-t-2 border-dashed border-[#2b1f3d]",
+            preparingContext ? "left-[16.667%] right-[16.667%]" : "left-[12.5%] right-[12.5%]",
+          )}
         />
 
         {/* The document itself, held above whichever desk has the work. */}
@@ -369,7 +371,7 @@ export function RetroOfficeLoader({
           </div>
         </div>
 
-        <div className="absolute inset-x-0 bottom-0 grid grid-cols-4 items-end gap-2">
+        <div className={cn("absolute inset-x-0 bottom-0 grid items-end gap-2", preparingContext ? "grid-cols-3" : "grid-cols-4")}>
           {stations.map((s, index) => {
             const downstreamActive = !preparingContext && phase === "specialists" && (s.id === "improver" || s.id === "advisor");
             const active = preparingContext ? index === station : phase === "planning" ? s.id === "planner" : downstreamActive;
@@ -377,7 +379,7 @@ export function RetroOfficeLoader({
               ? index < station || phase === "complete"
               : s.id === "planner" && (phase === "specialists" || phase === "complete");
             const muted = preparingContext
-              ? s.id === "planner" || index > station
+              ? index > station
               : s.id === "swapper" || (!active && !finished);
             return (
             <Desk

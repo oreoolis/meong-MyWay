@@ -39,6 +39,7 @@ describe("intake and completion lifecycle", () => {
   it("parses once, persists before question generation, and does not embed until completion", async () => {
     const response = await beginIntake("verified-user", "r1");
     expect(response.questionnaire.questions).toHaveLength(3);
+    expect(persisted?.questionGenerationVersion).toBe(4);
     expect(mocks.generateQuestions).toHaveBeenCalledWith(parsedFixture.profile);
     expect(mocks.saveIntake.mock.invocationCallOrder[0]).toBeLessThan(mocks.generateQuestions.mock.invocationCallOrder[0]);
     expect(mocks.embedParsedResume).not.toHaveBeenCalled();
@@ -81,10 +82,35 @@ describe("intake and completion lifecycle", () => {
     await expect(completeIntake("verified-user", submission)).rejects.toThrow();
     expect(mocks.embedParsedResume).not.toHaveBeenCalled();
   });
-  it("continues résumé-only when questions are unavailable", async () => {
-    mocks.generateQuestions.mockResolvedValue({ questions: [], usage: { inputTokens: 0, outputTokens: 0 } });
-    expect((await beginIntake("verified-user", "r1")).questionnaire.questions).toEqual([]);
-    await completeIntake("verified-user", body());
-    expect(mocks.embedParsedResume).toHaveBeenCalledWith(parsedFixture, []);
+  it("returns an error and keeps the parsed checkpoint when generation fails", async () => {
+    mocks.generateQuestions.mockRejectedValue(new Error("question generation failed"));
+    await expect(beginIntake("verified-user", "r1")).rejects.toThrow("question generation failed");
+    expect(persisted?.questionnaire.questions).toEqual([]);
+    expect(persisted?.questionsGenerated).toBe(false);
+    expect(mocks.parseResumeProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.embedParsedResume).not.toHaveBeenCalled();
+  });
+  it("recovers an unfinished cached intake without parsing the résumé again", async () => {
+    persisted = {
+      parsed: structuredClone(parsedFixture),
+      generationUsage: { inputTokens: 0, outputTokens: 0 },
+      questionsGenerated: true,
+      questionGenerationVersion: 3,
+      leaseToken: "",
+      leaseUntil: 0,
+      questionnaire: {
+        intakeId: "interrupted",
+        resumeId: "r1",
+        version: 1,
+        expiresAt: Math.floor(Date.now() / 1000) + 1000,
+        questions: normaliseQuestions(gapsFixture.slice(0, 2), parsedFixture),
+      },
+    };
+
+    const response = await beginIntake("verified-user", "r1");
+
+    expect(response.questionnaire.questions).toHaveLength(3);
+    expect(mocks.parseResumeProfile).not.toHaveBeenCalled();
+    expect(mocks.generateQuestions).toHaveBeenCalledTimes(1);
   });
 });

@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   return progressResponse(request, async report => {
     try { return authJson(await (report ? beginIntake(auth.caller.userId, body.resumeId, report) : beginIntake(auth.caller.userId, body.resumeId)), 200); }
     catch (error) {
-      if (error instanceof QuestionnaireError) return authJson({ error: error.message }, error.status);
+      if (error instanceof QuestionnaireError) return authJson({ error: error.message, retryable: error.status >= 500 }, error.status);
       if (error instanceof DocumentRejectedError) return authJson({ error: error.message, kind: "document-rejected", retryable: false }, 422);
       if (error instanceof AwsConfigurationError) return authJson({ error: "The agents are not configured yet." }, 503);
       console.error("[api/intake] failed", error);

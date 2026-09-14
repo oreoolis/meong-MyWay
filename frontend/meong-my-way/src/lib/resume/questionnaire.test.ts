@@ -14,14 +14,13 @@ const submit = (q: ResumeQuestionnaire, selections: unknown[] = []) => ({ intake
 beforeEach(() => vi.resetAllMocks());
 
 describe("bounded question generation", () => {
-  it("produces two or three questions with four substantive options and a server skip", () => {
-    for (const gaps of [gapsFixture.slice(0, 2), gapsFixture]) {
+  it("produces one to three questions with four substantive options", () => {
+    for (const gaps of [gapsFixture.slice(0, 1), gapsFixture.slice(0, 2), gapsFixture]) {
       const qs = normaliseQuestions(gaps, parsedFixture);
       expect(qs).toHaveLength(gaps.length);
       for (const q of qs) {
         expect(q.options.filter(o => o.contributesEvidence)).toHaveLength(4);
-        expect(q.options.at(-1)).toMatchObject({ contributesEvidence: false, evidence: "" });
-        expect(new Set(q.options.map(o => o.id)).size).toBe(5);
+        expect(new Set(q.options.map(o => o.id)).size).toBe(4);
         expect(q.prompt).toContain(q.reference);
       }
     }
@@ -39,13 +38,14 @@ describe("bounded question generation", () => {
     const text = normaliseQuestions(raw, parsedFixture).flatMap(q => [q.prompt, ...q.options.flatMap(o => [o.label, o.evidence])]).join("\n");
     expect(text).not.toMatch(/Obviously|Lambda|Kubernetes|CTO|1-5|3-8/);
   });
-  it("removes duplicate gaps, equivalent source names, malformed selectors and established proficiency", () => {
+  it("removes duplicate gaps, equivalent source names and malformed selectors", () => {
     expect(normaliseQuestions([null, {}, { facet: "unknown", index: 0 }, { ...gapsFixture[0], index: -1 }], parsedFixture)).toEqual([]);
     const profile = structuredClone(parsedFixture);
     profile.profile.skills[1].name = "aws";
     expect(normaliseQuestions([...gapsFixture, ...gapsFixture], profile)).toHaveLength(2);
-    profile.profile.skills[0].confidence = 1;
-    expect(normaliseQuestions(gapsFixture.slice(0, 2), profile)).toEqual([]);
+    const confident = structuredClone(parsedFixture);
+    confident.profile.skills[0].confidence = 1;
+    expect(normaliseQuestions(gapsFixture.slice(0, 2), confident)).toHaveLength(2);
   });
   it("uses disjoint calendar ranges and distinct project scope categories", () => {
     const q = questionnaire();
@@ -55,12 +55,16 @@ describe("bounded question generation", () => {
     expect(q.questions[1].options[3].label).toContain(`${year - 5} or earlier`);
     expect(q.questions[2].options[2].label).toBe("Multiple teams, one project");
   });
-  it("falls back on generation failure and on fewer than two approved questions", async () => {
+  it("fails intake when generation cannot supply two questions", async () => {
     reasonJson.mockRejectedValueOnce(new Error("unavailable"));
-    expect((await generateResumeContext(parsedFixture.profile)).questions).toEqual([]);
+    await expect(generateResumeContext(parsedFixture.profile)).rejects.toThrow("could not prepare your questions");
+  });
+  it("retains two generated candidates when review is overly strict", async () => {
     reasonJson.mockResolvedValueOnce({ value: { gaps: gapsFixture }, usage: parsedFixture.usage });
     reasonJson.mockResolvedValueOnce({ value: { validIds: [] }, usage: parsedFixture.usage });
-    expect((await generateResumeContext(parsedFixture.profile)).questions).toEqual([]);
+    const result = await generateResumeContext(parsedFixture.profile);
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions.map(question => question.prompt)).toEqual(normaliseQuestions(gapsFixture, parsedFixture).slice(0, 2).map(question => question.prompt));
   });
   it("approves only IDs belonging to the rendered candidate set", async () => {
     reasonJson.mockResolvedValueOnce({ value: { gaps: gapsFixture }, usage: parsedFixture.usage });
@@ -89,12 +93,11 @@ describe("server resolved evidence", () => {
     for (const override of [{ resumeId: "replaced" }, { intakeId: "old" }, { version: 2 }]) expect(() => resolveSubmission({ ...submit(q), ...override }, q)).toThrow();
     expect(() => resolveSubmission(submit(q), { ...q, expiresAt: 0 })).toThrow();
   });
-  it("unanswered and explicit skip add nothing, while factual none remains evidence", () => {
+  it("unanswered adds nothing, while a factual none answer remains evidence", () => {
     const q = questionnaire();
     expect(resolveSubmission(submit(q), q).evidence).toEqual([]);
-    const selection = { questionId: q.questions[0].id, optionId: q.questions[0].options[4].id };
-    expect(resolveSubmission(submit(q, [selection]), q).evidence).toEqual([]);
-    expect(resolveSubmission(submit(q, [{ ...selection, optionId: q.questions[0].options[0].id }]), q).evidence[0].statement).toContain("not used AWS directly");
+    const selection = { questionId: q.questions[0].id, optionId: q.questions[0].options[0].id };
+    expect(resolveSubmission(submit(q, [selection]), q).evidence[0].statement).toContain("not used AWS directly");
     expect(enrichedEmbeddingText(parsedFixture.embeddingText, [])).toBe(parsedFixture.embeddingText);
   });
   it("stores the exact question and selected answer in the final profile evidence", () => {
@@ -107,13 +110,26 @@ describe("server resolved evidence", () => {
   it("embeds selected factual statements without changing original fields or inventing services", async () => {
     const q = questionnaire();
     const evidence = resolveSubmission(submit(q, [{ questionId: q.questions[0].id, optionId: q.questions[0].options[2].id }]), q).evidence;
+    reasonJson.mockResolvedValue({
+      value: {
+        summary: "Operations analyst with independently used AWS experience.",
+        embeddingText: "Operations analyst with independently used AWS experience.",
+      },
+      usage: { inputTokens: 20, outputTokens: 10 },
+    });
     embedResumeText.mockResolvedValue({ model: "test", dimensions: 2, inputTokens: 50, vector: [1, 0] });
     const before = structuredClone(parsedFixture);
     const result = await embedParsedResume(parsedFixture, evidence);
     expect(embedResumeText).toHaveBeenCalledWith(expect.stringContaining("I used AWS independently"));
+    expect(reasonJson).toHaveBeenCalledWith(expect.objectContaining({
+      agent: "parser-questionnaire",
+      prompt: expect.stringContaining('"answer":"Used independently"'),
+    }));
     expect(result.embeddingText).not.toMatch(/Lambda|S3/);
     expect(parsedFixture).toEqual(before);
+    expect(result.profile.summary).toBe("Operations analyst with independently used AWS experience.");
     expect(result.profile.skills).toEqual(before.profile.skills);
     expect(result.profile.questionnaireEvidence).toEqual(evidence);
+    expect(result.usage).toEqual({ inputTokens: 120, outputTokens: 110 });
   });
 });

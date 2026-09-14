@@ -34,6 +34,9 @@ it("keeps stale and rejected-document errors actionable", async () => {
   expect(await rejected.json()).toMatchObject({ kind: "document-rejected" });
   mocks.completeIntake.mockRejectedValueOnce(new QuestionnaireError("Stale résumé", 409));
   expect((await complete(request({}))).status).toBe(409);
+  mocks.beginIntake.mockRejectedValueOnce(new QuestionnaireError("Question generation failed", 502));
+  const generationFailure = await intake(request({ resumeId: "r1" }));
+  expect(await generationFailure.json()).toMatchObject({ error: "Question generation failed", retryable: true });
 });
 it("does not expose the internal questionnaire or lease through analysis GET", async () => {
   mocks.getAnalysis.mockResolvedValue({ intake: { leaseToken: "secret", questions: [] }, profile: { candidateName: "Ada" } });
