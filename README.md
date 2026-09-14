@@ -58,6 +58,14 @@
   </tr>
 </table>
 
+The job listings feed adds three more, all optional — the app runs without them:
+
+<p>
+  <img src="https://img.shields.io/badge/AWS_Lambda-jobs_scraper-FF9900?style=flat-square&logo=awslambda&logoColor=white" />
+  <img src="https://img.shields.io/badge/Amazon_EventBridge-12--hour_schedule-FF4F8B?style=flat-square&logo=amazoneventbridge&logoColor=white" />
+  <img src="https://img.shields.io/badge/Amazon_CloudWatch-staleness_alarm-FF4F8B?style=flat-square&logo=amazoncloudwatch&logoColor=white" />
+</p>
+
 ### Infrastructure & CI
 
 <p>
@@ -69,7 +77,10 @@
 ### External Data
 <p>
   <img src="https://img.shields.io/badge/SSG--WSG-Skills_Framework_API-DC143C?style=flat-square&logo=singaporeairlines&logoColor=white" />
+  <img src="https://img.shields.io/badge/MyCareersFuture-live_job_postings-DC143C?style=flat-square&logo=singaporeairlines&logoColor=white" />
 </p>
+
+The two answer different questions. The Skills Framework is a **taxonomy** — what a "Data Analyst" is, what it pays, which competencies it demands — and has no vacancies in it. MyCareersFuture carries the **vacancies**: who is hiring right now, and the URL to apply. Roles and paths come from the first; the vacancies listed under each of them come from the second.
 
 ---
 
@@ -101,7 +112,9 @@ graph TD
         apiResume["/api/resume<br/>GET · POST · DELETE"]
         apiAnalysis["/api/analysis<br/>GET · POST"]
         apiSwap["/api/analysis/swap<br/>POST · deferred agent 5"]
+        apiJobs["/api/jobs<br/>GET · the jobs snapshot"]
         orchestrator["Agent Orchestrator<br/>lib/agents/orchestrator.ts"]
+        matcher["Job Matcher<br/>lib/jobs/matching.ts<br/>(no model call)"]
     end
 
     Browser -->|"SRP sign-in / sign-up<br/>(Amplify Auth)"| KC
@@ -134,7 +147,18 @@ graph TD
         s3[("S3 Bucket<br/>resume bytes")]
         ddbResumes[("DynamoDB<br/>{project}-resumes")]
         ddbAnalyses[("DynamoDB<br/>{project}-analyses")]
+        s3Jobs[("S3 Bucket<br/>{project}-jobs<br/>jobs/latest.json")]
     end
+
+    subgraph jobsfeed["💼 Job listings feed (every 12h)"]
+        ebRule["Amazon EventBridge<br/>rate(12 hours)"]
+        lambda["AWS Lambda<br/>lambda/jobs-scraper"]
+        mcf[("🇸🇬 MyCareersFuture<br/>public jobs API")]
+    end
+
+    ebRule -->|scheduled invoke| lambda
+    lambda -->|"GET, sorted by new_posting_date,<br/>paged until the 24h cutoff"| mcf
+    lambda -->|"run archive, then flip latest.json"| s3Jobs
 
     parser -->|Converse: reads PDF/DOCX,<br/>emits skills + embedding| bedrock
     planner -->|Converse: drafts trajectory<br/>+ paths| bedrock
@@ -147,6 +171,12 @@ graph TD
 
     advisor -.->|"job roles, sectors,<br/>salary bands"| ssg[("🇸🇬 SSG-WSG<br/>Skills Framework API")]
     swapper -.->|"job roles, sectors,<br/>salary bands"| ssg
+
+    Browser -->|"snapshot for any<br/>non-Next consumer"| apiJobs
+    apiJobs --> s3Jobs
+    orchestrator -->|"planner paths,<br/>advisor roles,<br/>swapper destinations"| matcher
+    matcher -->|"reads the snapshot"| s3Jobs
+    matcher -->|"embeds shortlisted postings,<br/>ranks against the resume vector"| bedrock
 
     subgraph deploy["⚙️ CI/CD"]
         gha["GitHub Actions<br/>on push to iac/**"]
@@ -341,6 +371,8 @@ sequenceDiagram
 | 4 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
 | 5 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations, portable skills, coach referrals |
 
+Agents 2, 4 and 5 additionally get live vacancies attached to whatever they produce — paths, matched roles, destinations — by `lib/jobs/matching.ts`. That step is deterministic and makes no model call; see [Live openings](#live-openings-why-matching-is-not-a-sixth-agent).
+
 Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3 and 4 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 5 sits deliberately outside that fan-out.
 
 ### Latency: why agent 5 runs separately
@@ -383,6 +415,31 @@ So each of them now runs in two tiers, and reports which one answered:
 | `reasoned` | The model's own account of the Singapore market | Estimates, labelled as such in the UI |
 
 The grounded tier is always tried first and is strongly preferred, since it is the reason the Skills Framework is wired in at all. The reasoning tier exists so that an API outage costs the user some precision rather than their entire answer. The distinction reaches the browser because it changes how much weight a reader should give a number, and the two are otherwise indistinguishable in the cards.
+
+### Live openings: why matching is not a sixth agent
+
+Every role and path the agents produce carries an optional `openings[]` — real vacancies with an employer and a URL. None of it is model output.
+
+They surface in three places, all behind a **"Suggested job openings (N)"** disclosure that sits directly above *"Why this fits"*:
+
+| Surface | Where | Source |
+|---|---|---|
+| Matched roles | Advisor stage, *Your standing* | Agent 4, Industry Advisor |
+| Career paths | Advisor stage, *Explore paths* | Agent 2, Career Planner |
+| Destinations | Transitioner stage | Agent 5, Career Swapper |
+
+The last two share `ComparePaths`, so one row covers both. Openings come before the rationale because someone scanning roles is readier to act on a vacancy than to read the argument for one, and the argument is still one click below. A role with no live vacancy drops the disclosure entirely rather than showing it empty — an empty panel reads as *"we looked and found nothing for you"*, which is a claim about the market that a lexical prefilter has no standing to make.
+
+The division is the same one that governs agents 4 and 5. **Which roles suit this person** is a judgement, and the model makes it. **Which of today's postings are that role** is a similarity question, and the embedding already answers it better — for a fraction of what putting 1,700 listings into a prompt would cost, with no chance of a hallucinated employer or a dead link.
+
+So `lib/jobs/matching.ts` runs two stages, mirroring `lib/agents/role-matching.ts`:
+
+1. **Lexical prefilter on the title.** Cheap, and it is what makes the question *"which postings are this role"* rather than *"which postings resemble this resume"*. Without it the same handful of best-fitting jobs attaches to every role indiscriminately, which reads as a recommendation and is not one.
+2. **The resume embedding, to rank what survived.** The prefilter knows the role matches; only the vector knows whether *this person* fits it.
+
+The embedding budget is the binding constraint, since a 24-hour snapshot carries well over a thousand postings and each embed is its own Bedrock call. Three caps hold it down: 12 candidates per role out of the prefilter, 40 embeds per run in total, 4 badges shown per role. The cache lives on the matcher, so a run that asks about the advisor's roles and then the planner's paths embeds each overlapping posting once.
+
+Openings are attached **before the artifact is stored**, so the stored analysis and the returned bundle agree. The trade is that a resumed analysis shows the vacancies that were live when it ran, not today's — acceptable while the alternative is re-embedding on every read.
 
 Both tiers end the Transitioner branch with **real, publicly funded career coaching services** (`lib/agents/coaches.ts`). That list is a verified constant, never model output, because a hallucinated agency or dead link is the one failure here whose cost lands outside the browser. The model only writes *what to ask* once the user gets there, tailored to the destinations it just produced.
 
@@ -448,7 +505,39 @@ terraform plan
 terraform apply
 ```
 
-This creates the S3 uploads bucket, the `{project}-resumes` and `{project}-analyses` DynamoDB tables, and resolves the two Bedrock model IDs. `terraform output` gives you every value the frontend `.env.local` needs. `create_iam` is off by default because the dev sandbox restricts IAM writes; flip it on when deploying somewhere with a real execution role. CI applies this automatically via `.github/workflows/deplopy-infra.yml` on pushes to `iac/**`.
+This creates the S3 uploads bucket, the `{project}-resumes` and `{project}-analyses` DynamoDB tables, and resolves the two Bedrock model IDs. `terraform output` gives you every value the frontend `.env.local` needs. `create_iam` is off by default because some sandbox accounts restrict IAM writes; flip it on when deploying somewhere with a real execution role. CI applies this automatically via `.github/workflows/deplopy-infra.yml` on pushes to `iac/**`.
+
+Then sync the outputs into the frontend's env file, rather than copying them by hand:
+
+```bash
+bash iac/sync-env.sh
+```
+
+#### 1b. (Optional) The job listings feed
+
+Off by default. Without it the app runs exactly as before, minus the opening badges — `getLatestJobs()` returns `null` and every `openings[]` is simply absent.
+
+It needs a Lambda execution role, so it is gated behind **both** `enable_jobs_scraper` and `create_iam`. A plain `terraform apply` leaves all eleven of its resources at `count = 0` and reports success, which is easy to mistake for a broken deploy.
+
+```bash
+cat > iac/terraform.tfvars <<'EOF'
+enable_jobs_scraper = true
+create_iam          = true
+EOF
+
+terraform -chdir=iac apply
+```
+
+That adds the jobs bucket, the scraper Lambda, a `rate(12 hours)` EventBridge rule, a log group, and a CloudWatch alarm. Invoke it once by hand rather than waiting out the first schedule, then re-sync the env:
+
+```bash
+aws lambda invoke --function-name meong-myway-jobs-scraper out.json && cat out.json
+bash iac/sync-env.sh
+```
+
+Expect `{"jobs":N,...}` with `N` above zero. The Lambda **raises rather than publishing an empty snapshot**, so a failure here is loud and `jobs/latest.json` keeps its last good contents — an empty job market shown to every user is a worse outcome than a stale one, and the CloudWatch alarm exists to catch exactly that.
+
+If `meta.hitPageCap` comes back `true`, paging stopped at the page cap instead of the 24-hour cutoff, so the window is truncated. Raise `JOBS_MAX_PAGES` in `iac/jobs.tf`.
 
 Enable model access once per account, in the Bedrock console under **Model access**, for `anthropic.claude-haiku-4-5-20251001-v1:0` and `amazon.titan-embed-text-v2:0`.
 
@@ -472,10 +561,14 @@ NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 # --- Server-only. Never prefix with NEXT_PUBLIC_. ---------------------------
 AWS_REGION=us-east-1
 
-# From `terraform output` in iac/.
+# From `terraform output` in iac/. Easiest via `bash iac/sync-env.sh`.
 S3_BUCKET_NAME=meong-myway-uploads-000000000000
 DYNAMODB_RESUMES_TABLE=meong-myway-resumes
 DYNAMODB_ANALYSES_TABLE=meong-myway-analyses
+
+# The job listings snapshot. Leave blank when the scraper is not deployed —
+# the app drops the opening badges and is otherwise unaffected.
+S3_JOBS_BUCKET=meong-myway-jobs-000000000000
 
 # Omit locally to use your own AWS CLI credentials; omit entirely when deployed
 # and let the task/instance role supply them.
@@ -523,6 +616,13 @@ Then open **http://localhost:3000**. Restart the dev server after changing any `
 | `npm run test:watch` | Vitest, unit project, watch mode |
 | `npm run test:integration` | Vitest, integration project (hits real Bedrock/AWS where configured) |
 
+The jobs scraper is outside the Next.js app and has its own runner, from the repo root:
+
+| Command | What it does |
+|---------|--------------|
+| `node --test lambda/jobs-scraper/handler.test.js` | Scraper field mapping, offline against a captured fixture |
+| `bash iac/sync-env.sh` | Rewrites `.env.local` from Terraform outputs |
+
 The integration suite prints its own per-agent timings and per-run cost on every run, which is where the figures in this README come from.
 
 ---
@@ -545,7 +645,8 @@ frontend/meong-my-way/src/
 │   │   ├── auth/session/route.ts   # verifies Cognito JWTs server-side
 │   │   ├── resume/route.ts         # GET/POST/DELETE the caller's stored resume
 │   │   ├── analysis/route.ts       # GET last run / POST to run agents 1 to 4
-│   │   └── analysis/swap/route.ts  # POST agent 5, deferred and prefetched
+│   │   ├── analysis/swap/route.ts  # POST agent 5, deferred and prefetched
+│   │   └── jobs/route.ts           # GET the jobs snapshot (unauthenticated)
 │   ├── globals.css                 # design tokens (light/dark), Tailwind v4 config
 │   ├── layout.tsx
 │   └── page.tsx                    # renders <Workspace/>
@@ -561,7 +662,8 @@ frontend/meong-my-way/src/
 │   │   ├── advisor-stage.tsx
 │   │   └── transitioner-stage.tsx
 │   └── ui/                          # primitives (incl. Meter + ProgressBar), icons,
-│                                    # stepper, agent trace, compare-paths
+│                                    # stepper, agent trace, compare-paths,
+│                                    # opening-badges (shared by all 3 surfaces)
 └── lib/
     ├── contracts.ts       # shared types, the agent/API contract
     ├── use-estimated-progress.ts  # projected progress for work that reports none
@@ -570,10 +672,28 @@ frontend/meong-my-way/src/
     │                       # + timings.ts: measured durations the UI estimates against
     ├── bedrock/           # Converse wrapper (reason.ts) + embeddings.ts
     ├── ssg/                # SSG-WSG API client + OAuth token cache
+    ├── jobs/               # snapshot types + S3 reader + matching.ts
+    │                       # (prefilter then embed; attaches openings to roles)
     ├── resume/             # upload validation, S3/DynamoDB store, client, pipeline
     ├── analysis/           # browser-side client for /api/analysis and /swap
     ├── auth/               # Amplify client wrapper, server-side JWT verification, route guard
     └── aws/clients.ts      # shared Bedrock/DynamoDB/S3 SDK clients
+```
+
+The jobs scraper is a separate deployable and lives outside the Next.js app:
+
+```
+lambda/jobs-scraper/
+├── handler.js        # the scraper — plain CommonJS, zero npm dependencies
+└── handler.test.js   # node:test, runs offline against a captured fixture
+```
+
+It has no `package.json` and no build step. `fetch` and `@aws-sdk/client-s3` both ship inside the Node.js 20.x Lambda runtime, so Terraform zips the single file as-is. `@aws-sdk/client-s3` is required lazily inside `publish()` rather than at the top of the module, which is what lets the pure functions be unit-tested on a machine where that package is not installed — this repo does not depend on it.
+
+Because it is a second language across a process boundary, **its output shape and `src/lib/jobs/types.ts` are kept in sync by hand**. There is no compiler checking that seam; the field-origin comments in both files are the only thing holding it together.
+
+```bash
+node --test lambda/jobs-scraper/handler.test.js
 ```
 
 ### Styling
@@ -651,6 +771,17 @@ Temporary `ASIA…` session credentials have aged out, which is common with lab 
 This bit the Career Swapper at the original 4096. Measured, its reasoned tier needs **5,227 to 6,293 output tokens** to emit four destinations with rationales, gaps, milestones and a coach brief, so both its tiers now run at 8192 (`DESTINATION_CEILING` in `career-swapper.ts`). The roughly 1,000-token spread between two similar resumes is why the ceiling has headroom rather than sitting just above the first measurement: the cost tracks how much the resume gives the model to work with.
 
 Raising any agent's ceiling invalidates the budget arithmetic in [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md). The per-run bound is now **$0.174** worst case against a measured typical of **~$0.078**, and `orchestrator.itest.ts` asserts it. Note that the bound counts the advisor and swapper **twice**: both run a grounded tier and fall back to a reasoned one, and a grounded call that returns no valid role ID has already been paid for when the reasoned call fires.
+
+**No "Suggested job openings" disclosure on any role or path**
+Four separate links in that chain, and all four fail the same silent way — no error, the disclosure simply never renders. Check them in order:
+
+1. **Is the scraper deployed?** `terraform -chdir=iac state list | grep jobs` should list eleven resources. Empty means `terraform apply` ran without `enable_jobs_scraper` and `create_iam`, in which case every resource sat at `count = 0` and Terraform still reported success.
+2. **Has it ever run?** `aws s3 ls s3://{project}-jobs-{account}/jobs/`. The EventBridge rule fires every 12 hours, so a fresh deploy has published nothing yet — invoke it by hand.
+3. **Does the app know the bucket?** `grep S3_JOBS_BUCKET frontend/meong-my-way/.env.local`. Absent means `sync-env.sh` has not run since the apply. `getJobsConfig()` then returns `null` and every opening is dropped. **This is the most common cause.** Fix it, then restart the dev server — Next.js reads env at server start.
+4. **Is the analysis new enough?** Openings are attached when an analysis runs and stored with it. An analysis produced before the scraper existed has none, and *"view previous results"* reads exactly that stored artifact. Run a fresh analysis rather than reopening the old one.
+
+**The disclosure appears on some roles but not others**
+Expected, and the reason it is dropped rather than shown empty. The prefilter needs at least one meaningful title token in common, so an SSG role title that no posting resembles gets nothing rather than being handed the snapshot's best-fitting jobs regardless — that floor is deliberate. Framework titles are also more formal than market ones ("Software and Applications Developer" against "Software Engineer"), so overlap varies by role. Seniority words are stripped before matching, since the resume vector judges seniority far better than a title token can.
 
 **Results say the destinations are "reasoned" rather than drawn from the framework**
 Expected when the Skills Framework returns nothing, but worth checking if it happens on every run. Usually `SSG_CLIENT_ID` and `SSG_CLIENT_SECRET` are unset or were rejected: the seven endpoints are published as "Authentication: Open" but answer 401 without a bearer token. The server logs `[swapper] ... falling back` or `[advisor] ... falling back` with the cause. Set `SSG_API_BASE_URL=https://mock-public-api.ssg-wsg.sg` to develop against canned data.

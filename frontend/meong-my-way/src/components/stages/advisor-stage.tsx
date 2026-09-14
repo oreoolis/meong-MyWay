@@ -12,9 +12,10 @@ import {
 import { CareerTabs } from "@/components/ui/career-tabs";
 import styles from "@/components/ui/career-workspace.module.css";
 
-import type { AnalysisBundle, JobOpening, ResumeRewrite } from "@/lib/contracts";
+import type { AnalysisBundle, ResumeRewrite } from "@/lib/contracts";
 import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
+import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { cn, formatCompactMoney } from "@/lib/utils";
 
@@ -45,53 +46,6 @@ function SuggestedRewrite({ text }: { text: string }) {
       </strong>
     );
   });
-}
-
-/**
- * Live vacancies for one role, as a row of badges.
- *
- * Each badge is an anchor, not a button with a click handler: middle-click,
- * "open in new tab" and "copy link" are exactly what someone wants from a job
- * listing, and only a real href gives them that. `rel="noopener noreferrer"`
- * because these point at third-party sites.
- */
-function OpeningBadges({ openings }: { openings: JobOpening[] }) {
-  return (
-    <div className="mt-3">
-      <SectionLabel>
-        {openings.length} open {openings.length === 1 ? "role" : "roles"} right now
-      </SectionLabel>
-
-      <ul className="mt-2 flex flex-wrap gap-2" role="list">
-        {openings.map((opening) => (
-          <li key={opening.id}>
-            <a
-              href={opening.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={
-                opening.salary
-                  ? `${formatCompactMoney(opening.salary.low)}–${formatCompactMoney(opening.salary.high)} / month`
-                  : undefined
-              }
-              className={cn(
-                "inline-flex max-w-full items-center gap-1.5 rounded-full border border-hairline bg-raised",
-                "px-3 py-1.5 text-[12.5px] text-ink-2 transition-colors",
-                "hover:border-accent hover:bg-accent-wash hover:text-ink",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-              )}
-            >
-              <span className="truncate font-medium text-ink">{opening.title}</span>
-              {opening.company ? (
-                <span className="truncate">· {opening.company}</span>
-              ) : null}
-              <ArrowRightIcon className="h-3 w-3 shrink-0" />
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
 }
 
 function RewriteRow({ rewrite }: { rewrite: ResumeRewrite }) {
@@ -213,24 +167,30 @@ export function AdvisorStage({
                       className="w-32 shrink-0"
                     />
                   </div>
-                  {/* Opened by the same disclosure as the rationale: the
-                      openings are the answer to "so where do I apply?", which
-                      is the question the rationale raises. Rendered when
-                      either exists, so a role with vacancies but no model
-                      commentary still shows them. */}
-                  {role.rationale || role.openings?.length ? (
+                  {/* Openings come first. Someone scanning matched roles is
+                      readier to act on "here is a vacancy" than to read why
+                      the role suits them, and the rationale is still one
+                      click away directly below. */}
+                  {role.openings?.length ? (
+                    <details className={styles.inlineDetail}>
+                      <summary>
+                        {openingsLabel(role.openings.length)}
+                        <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
+                      </summary>
+                      <div className={styles.inlineDetailBody}>
+                        <OpeningBadges openings={role.openings} className="mt-1" />
+                      </div>
+                    </details>
+                  ) : null}
+
+                  {role.rationale ? (
                     <details className={styles.inlineDetail}>
                       <summary>
                         Why this fits
                         <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
                       </summary>
                       <div className={styles.inlineDetailBody}>
-                        {role.rationale ? (
-                          <p className="text-[13px] leading-relaxed text-ink-2">{role.rationale}</p>
-                        ) : null}
-                        {role.openings?.length ? (
-                          <OpeningBadges openings={role.openings} />
-                        ) : null}
+                        <p className="text-[13px] leading-relaxed text-ink-2">{role.rationale}</p>
                       </div>
                     </details>
                   ) : null}

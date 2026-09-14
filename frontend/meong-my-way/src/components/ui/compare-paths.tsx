@@ -13,6 +13,7 @@ import {
 import type { CareerPath, GapSeverity, PathKind, ResumeProfile } from "@/lib/contracts";
 import { cn, formatCompactMoney } from "@/lib/utils";
 import { Meter } from "./primitives";
+import { OpeningBadges, openingsLabel } from "./opening-badges";
 import styles from "./career-workspace.module.css";
 import { CriticalIcon, ModerateIcon, SeriousIcon } from "./icons";
 
@@ -70,6 +71,17 @@ function Chips({ items, tone }: { items: string[]; tone: "neutral" | "accent" })
 }
 
 const ROWS: Row[] = [
+  {
+    // First, and filtered out entirely when the path has no vacancies — see
+    // `visibleRows`. Someone comparing destinations is readier to act on a
+    // real opening than to read the argument for the path, and the argument
+    // is still one row below.
+    key: "openings",
+    label: "Suggested job openings",
+    Icon: Briefcase,
+    left: () => null,
+    right: (path) => <OpeningBadges openings={path.openings ?? []} />,
+  },
   {
     key: "why",
     label: "Why this fits",
@@ -317,9 +329,12 @@ export function ComparePaths({
               <div><dt>Skills to build</dt><dd>{path.gaps.length}</dd></div>
             </dl>
           </div>
-          {ROWS.map((row) =>
+          {/* The openings row is dropped rather than shown empty: a path with
+              no live vacancy today should not read as one whose vacancies you
+              failed to find. */}
+          {ROWS.filter((row) => row.key !== "openings" || (path.openings?.length ?? 0) > 0).map((row) =>
             <details key={`${path.id}-${row.key}`} className={styles.detail}>
-              <summary><row.Icon className="h-4 w-4 shrink-0" />{row.label}<ChevronDown aria-hidden="true" className={styles.disclosureIcon} /></summary>
+              <summary><row.Icon className="h-4 w-4 shrink-0" />{row.key === "openings" ? openingsLabel(path.openings?.length ?? 0) : row.label}<ChevronDown aria-hidden="true" className={styles.disclosureIcon} /></summary>
               <div className={styles.detailBody}>
                 {row.key === "carries" ? <div className={styles.comparison}>
                   <div><p className="mb-3 text-xs font-semibold text-ink-2">{baselineLabel}</p>{row.left(profile)}</div>
