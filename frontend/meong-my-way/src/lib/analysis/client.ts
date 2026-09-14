@@ -133,6 +133,28 @@ export async function runAnalysis(signal?: AbortSignal): Promise<AnalysisBundle>
   return body.analysis;
 }
 
+/**
+ * `StoredAnalysis` (artifact-keyed, read back from the DB) into `AnalysisBundle`
+ * (what the results stages render).
+ *
+ * `null` when `profile`, `plan`, or `improver` is missing — those three are the
+ * minimum a results screen needs. Cost is not persisted per run, so a resumed
+ * bundle always reports zero cost rather than a wrong figure.
+ */
+export function toAnalysisBundle(stored: StoredAnalysis): AnalysisBundle | null {
+  if (!stored.profile || !stored.plan || !stored.improver) return null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    profile: stored.profile,
+    plan: stored.plan,
+    improvement: stored.improver,
+    advice: stored.advisor ?? null,
+    swap: stored.swapper ?? null,
+    cost: { inputTokens: 0, outputTokens: 0, embeddingTokens: 0, estimatedUsd: 0 },
+  };
+}
+
 /** What the swapper produced, plus what that one agent cost on its own. */
 export type CareerSwapResult = {
   swap: CareerSwap | null;

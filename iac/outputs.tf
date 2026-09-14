@@ -40,6 +40,12 @@ output "agent_runtime_policy_arn" {
   value = var.create_iam ? aws_iam_policy.agent_runtime[0].arn : null
 }
 
+# Set as S3_JOBS_BUCKET in the frontend's .env.local. `null` when the scraper
+# is not enabled — sync-env.sh treats that as optional, not a hard failure.
+output "jobs_bucket_name" {
+  value = local.jobs_enabled ? aws_s3_bucket.jobs[0].bucket : null
+}
+
 # output "iam_policy_arn" {
 #   value = aws_iam_policy.app_access.arn
 # }

@@ -2,13 +2,15 @@
 
 import { useRef, useState } from "react";
 
-import { Button, SectionLabel } from "@/components/ui/primitives";
+import { Button, Card, Chip, SectionLabel } from "@/components/ui/primitives";
 import { ResumeScreeningPanel } from "@/components/ui/resume-screening-panel";
 import {
   ArrowRightIcon,
+  CheckIcon,
   CriticalIcon,
   DocumentIcon,
   LockIcon,
+  TrashIcon,
   UploadIcon,
   XIcon,
 } from "@/components/ui/icons";
@@ -34,6 +36,10 @@ export function UploadStage({
   onFileChange,
   onAnalyze,
   storedResume,
+  hasStoredAnalysis = false,
+  onViewPrevious,
+  onDeleteResume,
+  deletingResume = false,
   uploadError,
   busy = false,
 }: {
@@ -42,6 +48,13 @@ export function UploadStage({
   onAnalyze: () => void;
   /** What is already on the user's account, if anything. */
   storedResume?: StoredResume | null;
+  /** Whether a previous run's results survive for that stored resume. */
+  hasStoredAnalysis?: boolean;
+  /** Jump straight to those results instead of re-running the pipeline. */
+  onViewPrevious?: () => void;
+  /** Remove the stored resume via `DELETE /api/resume`. */
+  onDeleteResume?: () => void;
+  deletingResume?: boolean;
   /** A failure reported by the server on the last attempt. */
   uploadError?: string | null;
   busy?: boolean;
@@ -96,7 +109,14 @@ export function UploadStage({
             </p>
           </div>
 
-          {storedResume ? <StoredResumeNotice resume={storedResume} /> : null}
+          {storedResume ? (
+            <StoredResumeNotice
+              resume={storedResume}
+              onView={hasStoredAnalysis ? onViewPrevious : undefined}
+              onDelete={onDeleteResume}
+              deleting={deletingResume}
+            />
+          ) : null}
 
           <div className="mw-rise mw-delay-1 mt-6">
             {file ? (
@@ -185,14 +205,6 @@ export function UploadStage({
                   : "Analyze my resume"}
               {busy ? null : <ArrowRightIcon className="h-4 w-4" />}
             </Button>
-
-            <p className="mt-4 flex items-start justify-center gap-2 text-[12.5px] leading-relaxed text-ink-muted">
-              <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                Kept on your account so you only upload once. Only you can see
-                it.
-              </span>
-            </p>
           </div>
         </div>
       </section>
@@ -202,28 +214,91 @@ export function UploadStage({
   );
 }
 
-/** What is already on file, so replacing it is a deliberate act. */
-function StoredResumeNotice({ resume }: { resume: StoredResume }) {
+/**
+ * What is already on file, so replacing it is a deliberate act.
+ *
+ * Clickable when a previous run's results still exist for it — clicking jumps
+ * straight to those results instead of re-running the pipeline.
+ */
+function StoredResumeNotice({
+  resume,
+  onView,
+  onDelete,
+  deleting = false,
+}: {
+  resume: StoredResume;
+  onView?: () => void;
+  /** Remove the stored resume. */
+  onDelete?: () => void;
+  deleting?: boolean;
+}) {
   return (
-    <div className="mw-fade mt-6 rounded-xl border border-hairline bg-raised p-4">
-      <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent">
+    <Card
+      onClick={onView}
+      role={onView ? "button" : undefined}
+      tabIndex={onView ? 0 : undefined}
+      onKeyDown={
+        onView
+          ? (e: React.KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onView();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        "mw-fade relative mt-6 p-4",
+        onView && "cursor-pointer transition-colors hover:bg-raised",
+      )}
+    >
+      <div className="absolute top-4 right-4 flex items-center gap-1.5">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent-wash text-accent">
           <DocumentIcon className="h-4 w-4" />
         </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-ink">
-            On your account: <span className="font-normal">{resume.fileName}</span>
-          </p>
-          <p className="mt-0.5 text-[12px] text-ink-2">
-            {resume.format.toUpperCase()} · {formatBytes(resume.sizeBytes)} ·
-            uploaded {new Date(resume.uploadedAt).toLocaleDateString()}
-          </p>
-        </div>
+
+        {onDelete ? (
+          <button
+            type="button"
+            aria-label={`Delete ${resume.fileName}`}
+            disabled={deleting}
+            onClick={(e) => {
+              // The card itself is clickable — this must not also trigger it.
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-critical/10 hover:text-critical disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <TrashIcon className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
+
+      <div className={cn("min-w-0", onDelete ? "pr-20" : "pr-12")}>
+        <p className="text-[12px] text-ink-2">On your account</p>
+        <p className="mt-1 truncate text-[15px] font-semibold text-ink">
+          {resume.fileName}
+        </p>
+      </div>
+
+      <div className="mt-3 flex items-center gap-2 text-[12px] text-ink-2">
+        <Chip tone="neutral" className="text-ink-2">
+          {resume.format.toUpperCase()} · {formatBytes(resume.sizeBytes)}
+        </Chip>
+        uploaded {new Date(resume.uploadedAt).toLocaleDateString()}
+      </div>
+
       <p className="mt-3 text-[12.5px] leading-relaxed text-ink-2">
-        Uploading a new file replaces this one.
+        {onView ? (
+          <span className="inline-flex items-center gap-1.5 font-medium text-ink">
+            <CheckIcon className="h-3.5 w-3.5" />
+            Analysis ready — click to view it.
+          </span>
+        ) : (
+          "Uploading a new file replaces this one."
+        )}
       </p>
-    </div>
+    </Card>
   );
 }
 

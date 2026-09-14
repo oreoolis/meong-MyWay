@@ -18,9 +18,12 @@ iac/*.tfvars.json
 iac/*.tfplan
 iac/crash.log
 
+# Built by `terraform apply` from lambda/jobs-scraper/handler.js — the source
+# is committed, the zip is not.
+lambda/jobs-scraper/jobs-scraper.zip
+
 # Remove all docs and reasoning
-docs/adr
-docs/agents
+docs/*
 docs/auth
 CLAUDE.md
 skills-lock.json

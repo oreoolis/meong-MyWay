@@ -16,8 +16,8 @@ import {
   signOutCurrentUser,
   type AuthenticatedUser,
 } from "@/lib/auth/client";
-import { requestCareerSwap } from "@/lib/analysis/client";
-import { fetchStoredResume } from "@/lib/resume/client";
+import { fetchAnalysis, requestCareerSwap, toAnalysisBundle } from "@/lib/analysis/client";
+import { deleteStoredResume, fetchStoredResume } from "@/lib/resume/client";
 import { runResumePipeline, type PipelinePhase } from "@/lib/resume/pipeline";
 import type { StoredResume } from "@/lib/resume/types";
 
@@ -61,12 +61,14 @@ export function Workspace() {
     useState<Record<AgentId, AgentStep[]>>(NO_STEPS);
   const [phase, setPhase] = useState<PipelinePhase>("uploading");
   const [storedResume, setStoredResume] = useState<StoredResume | null>(null);
+  const [storedAnalysis, setStoredAnalysis] = useState<AnalysisBundle | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisBundle | null>(null);
   /** Which results view is open. `null` is the fork itself. */
   const [branch, setBranch] = useState<ResultsBranch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deletingResume, setDeletingResume] = useState(false);
 
   /**
    * The career swapper's own request, tracked apart from `analysis.swap`.
@@ -90,6 +92,16 @@ export function Workspace() {
     }
   }, []);
 
+  /** Load whatever analysis survives from a previous run, if any. */
+  const loadStoredAnalysis = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const stored = await fetchAnalysis(signal);
+      setStoredAnalysis(stored ? toAnalysisBundle(stored) : null);
+    } catch {
+      setStoredAnalysis(null);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
@@ -98,7 +110,10 @@ export function Workspace() {
       if (cancelled || !user) return;
       setSession({ ...user, storageConsent: false });
       setStage("upload");
-      await loadStoredResume(controller.signal);
+      await Promise.all([
+        loadStoredResume(controller.signal),
+        loadStoredAnalysis(controller.signal),
+      ]);
     });
 
     return () => {
@@ -107,7 +122,7 @@ export function Workspace() {
       abortRef.current?.abort();
       swapAbortRef.current?.abort();
     };
-  }, [loadStoredResume]);
+  }, [loadStoredResume, loadStoredAnalysis]);
 
   /**
    * Each agent owns its own trace.
@@ -183,6 +198,7 @@ export function Workspace() {
       setStorageSteps([]);
       setAgentSteps(NO_STEPS);
       setAnalysis(null);
+      setStoredAnalysis(null);
       setBranch(null);
       setSwapState("idle");
       setError(null);
@@ -240,6 +256,7 @@ export function Workspace() {
     setSession({ ...user, storageConsent: false });
     setStage("upload");
     void loadStoredResume();
+    void loadStoredAnalysis();
   }
 
   async function handleSignOut() {
@@ -253,12 +270,41 @@ export function Workspace() {
       setStorageSteps([]);
       setAgentSteps(NO_STEPS);
       setStoredResume(null);
+      setStoredAnalysis(null);
       setAnalysis(null);
       setBranch(null);
       setSwapState("idle");
       setError(null);
       setUploadError(null);
       setStage("landing");
+    }
+  }
+
+  /** Skip the pipeline. Jump straight to the results already on file. */
+  function handleViewPrevious() {
+    if (!storedAnalysis) return;
+    setAnalysis(storedAnalysis);
+    setBranch(null);
+    setSwapState(storedAnalysis.swap ? "done" : "idle");
+    setError(null);
+    setUploadError(null);
+    setStage("results");
+  }
+
+  /** Remove the stored resume (and, with it, whatever analysis pointed at it). */
+  async function handleDeleteResume() {
+    setDeletingResume(true);
+    setUploadError(null);
+    try {
+      await deleteStoredResume();
+      setStoredResume(null);
+      setStoredAnalysis(null);
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : "Could not delete your resume. Try again.",
+      );
+    } finally {
+      setDeletingResume(false);
     }
   }
 
@@ -297,6 +343,7 @@ export function Workspace() {
     if (session) {
       setStage("upload");
       void loadStoredResume();
+      void loadStoredAnalysis();
       return;
     }
 
@@ -344,6 +391,10 @@ export function Workspace() {
             }}
             onAnalyze={handleAnalyze}
             storedResume={storedResume}
+            hasStoredAnalysis={Boolean(storedAnalysis)}
+            onViewPrevious={handleViewPrevious}
+            onDeleteResume={() => void handleDeleteResume()}
+            deletingResume={deletingResume}
             uploadError={uploadError}
             busy={busy}
           />
