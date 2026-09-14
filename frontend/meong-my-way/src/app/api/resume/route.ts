@@ -7,6 +7,7 @@ import {
   sniffResumeFormat,
   validateResumeUpload,
 } from "@/lib/resume/file-policy";
+import { deleteAnalysis } from "@/lib/agents/store";
 import { deleteResume, getResume, putResume } from "@/lib/resume/store";
 
 /**
@@ -106,6 +107,11 @@ export async function POST(request: Request) {
       contentType: RESUME_FORMATS[format].mimeTypes[0],
       bytes,
     });
+
+    // New file, old analysis void. Kill stale rows so read-back never shows
+    // results for resume no longer stored.
+    await deleteAnalysis(auth.caller.userId);
+
     return authJson(result, 201);
   } catch (error) {
     const configured = configurationErrorResponse(error);
@@ -121,7 +127,10 @@ export async function DELETE(request: Request) {
   if (!auth.ok) return auth.response;
 
   try {
-    return authJson({ deleted: await deleteResume(auth.caller.userId) }, 200);
+    const deleted = await deleteResume(auth.caller.userId);
+    // No resume left for the analysis to belong to.
+    await deleteAnalysis(auth.caller.userId);
+    return authJson({ deleted }, 200);
   } catch (error) {
     const configured = configurationErrorResponse(error);
     if (configured) return configured;

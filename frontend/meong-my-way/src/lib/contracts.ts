@@ -117,6 +117,32 @@ export type SalaryBand = {
 
 export type DemandTrend = "high" | "moderate" | "emerging";
 
+/* -------------------------------------------------------------------------
+ * Live job openings
+ *
+ * Attached to roles and paths by `lib/jobs/matching.ts`, not produced by any
+ * model. A role is a category ("Data Analyst"); an opening is a specific
+ * vacancy at a named employer with a URL someone can actually apply through.
+ * Everything here comes from the jobs snapshot verbatim — nothing is inferred,
+ * because a fabricated employer or a dead link is the one failure here that
+ * wastes a user's afternoon.
+ * ---------------------------------------------------------------------- */
+
+export type JobOpening = {
+  /** The posting's own id in the snapshot. */
+  id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  /** The public listing page. Where the badge sends the user. */
+  url: string;
+  /** ISO-8601 UTC, from the snapshot. */
+  postedAt: string;
+  salary: SalaryBand | null;
+  /** 0–100. Cosine similarity of the posting against the resume embedding. */
+  matchScore: number;
+};
+
 export type CareerPath = {
   id: string;
   title: string;
@@ -132,6 +158,15 @@ export type CareerPath = {
   gaps: SkillGap[];
   milestones: Milestone[];
   sampleEmployers: string[];
+  /**
+   * Live vacancies matching this path, best fit first.
+   *
+   * Optional because it is attached after the agent returns, and because an
+   * analysis stored before this feature existed — or produced while the jobs
+   * snapshot was unavailable — simply has none. Absent and empty mean the
+   * same thing to the UI: show no badges.
+   */
+  openings?: JobOpening[];
 };
 
 export type CurrentTrajectory = {
@@ -208,6 +243,8 @@ export type MatchedRole = {
   salary: SalaryBand | null;
   /** Why the model thinks this role fits — not from the API. */
   rationale: string;
+  /** Live vacancies for this role, best fit first. See `JobOpening`. */
+  openings?: JobOpening[];
 };
 
 export type IndustryAdvice = {

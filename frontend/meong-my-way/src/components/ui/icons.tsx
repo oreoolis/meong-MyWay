@@ -99,6 +99,15 @@ export function XIcon({ className }: IconProps) {
   );
 }
 
+export function TrashIcon({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <path d="M4.5 7h15M9.5 7V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V7M18 7l-.8 12.1a2 2 0 0 1-2 1.9H8.8a2 2 0 0 1-2-1.9L6 7" />
+      <path d="M10 11v6M14 11v6" />
+    </Svg>
+  );
+}
+
 export function ChevronDownIcon({ className }: IconProps) {
   return (
     <Svg className={className}>

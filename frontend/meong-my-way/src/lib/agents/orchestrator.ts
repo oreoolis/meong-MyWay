@@ -2,6 +2,7 @@ import "server-only";
 
 import type { AnalysisBundle, CareerSwap, RunCost } from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
+import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
 import { readResumeBytes } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
 import { hasSsgCredentials } from "@/lib/ssg/oauth";
@@ -132,14 +133,34 @@ export async function runAnalysis(
   /* --- Agent 2: the plan everything else branches from ------------------ */
 
   onProgress?.({ phase: "planning" });
-  const planned = await planCareers(parsed.profile);
+
+  // The jobs snapshot is a single S3 read that depends on nothing the planner
+  // produces, so it is fetched alongside it rather than after. `null` here
+  // means no snapshot is available — the scraper is not deployed, or has never
+  // run — and every use below degrades to "no openings" rather than failing.
+  const [planned, jobMatcher] = await Promise.all([
+    planCareers(parsed.profile),
+    createJobMatcher(parsed.embedding.vector),
+  ]);
+
+  // Attached before the plan is stored, so the stored artifact and the
+  // returned bundle carry the same openings rather than diverging.
+  const plan = jobMatcher
+    ? {
+        ...planned.plan,
+        paths: withOpenings(
+          planned.plan.paths,
+          await jobMatcher.openingsFor(planned.plan.paths),
+        ),
+      }
+    : planned.plan;
 
   await Promise.all([
     putAnalysisArtifact({
       userId: resume.userId,
       artifact: "plan",
       expiresAt,
-      payload: planned.plan,
+      payload: plan,
     }),
     // The swapper runs after this request has already returned, so its routing
     // has to outlive the process that computed it.
@@ -187,6 +208,21 @@ export async function runAnalysis(
   const advice =
     advisorOutcome.status === "fulfilled" ? advisorOutcome.value : null;
 
+  // The advisor's roles are the ones the UI shows openings against, so they
+  // get the same treatment as the planner's paths. Done after the agent
+  // returns rather than inside it: which roles suit this person is the
+  // model's judgement, which postings are those roles is not.
+  const adviceWithOpenings =
+    advice && jobMatcher
+      ? {
+          ...advice.advice,
+          matchedRoles: withOpenings(
+            advice.advice.matchedRoles,
+            await jobMatcher.openingsFor(advice.advice.matchedRoles),
+          ),
+        }
+      : (advice?.advice ?? null);
+
   await Promise.all(
     [
       improvement &&
@@ -196,12 +232,12 @@ export async function runAnalysis(
           expiresAt,
           payload: improvement.improvement,
         }),
-      advice &&
+      adviceWithOpenings &&
         putAnalysisArtifact({
           userId: resume.userId,
           artifact: "advisor",
           expiresAt,
-          payload: advice.advice,
+          payload: adviceWithOpenings,
         }),
     ].filter(Boolean),
   );
@@ -220,7 +256,7 @@ export async function runAnalysis(
   return {
     generatedAt: new Date().toISOString(),
     profile: parsed.profile,
-    plan: planned.plan,
+    plan,
     // The improver is the only specialist with no framework dependency, so a
     // failure here is a model failure rather than a missing-data one — an
     // empty critique is the honest representation.
@@ -232,7 +268,7 @@ export async function runAnalysis(
       missingKeywords: [],
       formattingNotes: [],
     },
-    advice: advice?.advice ?? null,
+    advice: adviceWithOpenings,
     // Always null here. The swapper has not been asked to run yet; the client
     // starts it on the results screen and merges the result in. `null` and
     // "failed" are the same value, which is why the client tracks the request
@@ -273,15 +309,31 @@ export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
 
   if (!result) return null;
 
+  // The swapper's destinations are roles like any other, so they carry live
+  // openings too. Matched against the same stored resume vector the agent
+  // itself ranked with, so a destination's badges and its match score are
+  // answering the same question.
+  const matcher = await createJobMatcher(stored.embedding.vector);
+
+  const swap: CareerSwap = matcher
+    ? {
+        ...result.swap,
+        destinations: withOpenings(
+          result.swap.destinations,
+          await matcher.openingsFor(result.swap.destinations),
+        ),
+      }
+    : result.swap;
+
   await putAnalysisArtifact({
     userId,
     artifact: "swapper",
     expiresAt: expiryTimestamp(),
-    payload: result.swap,
+    payload: swap,
   });
 
   return {
-    swap: result.swap,
+    swap,
     // The swapper's own spend, not the run's total. The client adds it to what
     // the first response reported, so the figure on screen stays honest about
     // everything that was actually paid for.

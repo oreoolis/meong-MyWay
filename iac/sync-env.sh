@@ -40,6 +40,7 @@ analyses_table="$(read_output dynamodb_analyses_table_name)"
 bedrock_region="$(read_output bedrock_region)"
 reasoning_model="$(read_output bedrock_reasoning_model_id)"
 embedding_model="$(read_output bedrock_embedding_model_id)"
+jobs_bucket="$(read_output jobs_bucket_name)"
 
 region="$(grep -E '^\s*default\s*=' "$iac_dir/variables.tf" | sed -n '1s/.*"\(.*\)".*/\1/p')"
 region="${region:-us-east-1}"
@@ -87,6 +88,11 @@ BEDROCK_EMBEDDING_MODEL_ID=${embedding_model:-amazon.titan-embed-text-v2:0}
 SSG_CLIENT_ID=$ssg_client_id
 SSG_CLIENT_SECRET=$ssg_client_secret
 
+# The job listings snapshot bucket. Blank when enable_jobs_scraper is off —
+# that is expected, not an error; /api/jobs treats a missing bucket as "the
+# scraper is not deployed here" rather than a configuration failure.
+S3_JOBS_BUCKET=$jobs_bucket
+
 # AWS credentials intentionally omitted. The SDK reads ~/.aws/credentials via
 # its default provider chain, so the sandbox login is refreshed in exactly one
 # place. Setting AWS_ACCESS_KEY_ID here would override that and go stale.
@@ -100,5 +106,6 @@ echo "  DYNAMODB_ANALYSES_TABLE = ${analyses_table:-<empty>}"
 echo "  BEDROCK_REGION          = ${bedrock_region:-$region}"
 echo "  BEDROCK_REASONING_MODEL = ${reasoning_model:-us.anthropic.claude-haiku-4-5-20251001-v1:0}"
 echo "  SSG_CLIENT_ID           = ${ssg_client_id:+<preserved>}${ssg_client_id:-<empty — paste it into .env.local>}"
+echo "  S3_JOBS_BUCKET          = ${jobs_bucket:-<empty — enable_jobs_scraper is off>}"
 
 exit "$missing"

@@ -51,6 +51,21 @@ export function getStorageConfig() {
 }
 
 /**
+ * Where the job listings snapshot lives, if the scraper is deployed.
+ *
+ * Deliberately separate from `getStorageConfig()`: that function's required
+ * list throws `AwsConfigurationError` when any entry is missing, and the
+ * scraper is optional — the app is fully functional without it. Folding
+ * `S3_JOBS_BUCKET` in there would turn "the scraper isn't deployed here" into
+ * a hard failure on every request that touches storage, including ones that
+ * never touch jobs.
+ */
+export function getJobsConfig(): { bucket: string; key: string } | null {
+  const bucket = process.env.S3_JOBS_BUCKET?.trim();
+  return bucket ? { bucket, key: "jobs/latest.json" } : null;
+}
+
+/**
  * Which models the agents call, and where.
  *
  * The region is separate from the storage region because Bedrock is not
