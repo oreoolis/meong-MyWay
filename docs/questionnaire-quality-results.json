@@ -1,0 +1,96 @@
+{
+  "evaluatedAt": "2026-09-14T05:27:00.500Z",
+  "fixture": "synthetic operations analyst",
+  "roles": {
+    "cloud": "Cloud operations engineer. Independently uses AWS to operate cloud workloads, investigate operational issues and maintain reliable infrastructure.",
+    "reporting": "Operations reporting analyst. Prepares operational reports, maintains data quality and uses SQL to support business reporting.",
+    "governance": "Cloud governance lead. Guides and governs other people's use of AWS across teams, establishing cloud operating policies and standards.",
+    "unrelated": "Pastry chef. Prepares and bakes pastries, develops dessert recipes, decorates cakes and manages kitchen food hygiene.",
+    "coordination": "Business operations coordinator. Coordinates operational work, tracks tasks, maintains procedural documentation and compiles status updates for teams.",
+    "dataQuality": "Data quality administrator. Maintains accurate business records, investigates missing or inconsistent data and prepares data quality reports.",
+    "support": "Application support analyst. Investigates software incidents, analyses operational logs, maintains support documentation and reports service performance."
+  },
+  "texts": {
+    "baseline": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.",
+    "skipped": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.",
+    "independent": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI used AWS independently, without responsibility for other people's use.",
+    "governance": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI used AWS and was responsible for guiding or governing its use by others."
+  },
+  "cosineSimilarities": {
+    "baseline": {
+      "cloud": 0.33716617658094744,
+      "reporting": 0.6460058522846985,
+      "governance": 0.11322614658081462,
+      "unrelated": 0.008563426015989133,
+      "coordination": 0.2604415160538218,
+      "dataQuality": 0.34125649302539574,
+      "support": 0.41822067536047886
+    },
+    "skipped": {
+      "cloud": 0.33716617658094744,
+      "reporting": 0.6460058522846985,
+      "governance": 0.11322614658081462,
+      "unrelated": 0.008563426015989133,
+      "coordination": 0.2604415160538218,
+      "dataQuality": 0.34125649302539574,
+      "support": 0.41822067536047886
+    },
+    "independent": {
+      "cloud": 0.4126980996546583,
+      "reporting": 0.622339998272065,
+      "governance": 0.15309259242441203,
+      "unrelated": 0.01001043057594138,
+      "coordination": 0.24947930596486884,
+      "dataQuality": 0.2879083595780471,
+      "support": 0.4145675046181252
+    },
+    "governance": {
+      "cloud": 0.40349437515213377,
+      "reporting": 0.6283521757458439,
+      "governance": 0.1772034775476593,
+      "unrelated": 0.01153800845206884,
+      "coordination": 0.2624470962374268,
+      "dataQuality": 0.3058825952585459,
+      "support": 0.4175713252567653
+    }
+  },
+  "rankings": {
+    "baseline": [
+      "reporting",
+      "support",
+      "dataQuality",
+      "cloud",
+      "coordination",
+      "governance",
+      "unrelated"
+    ],
+    "skipped": [
+      "reporting",
+      "support",
+      "dataQuality",
+      "cloud",
+      "coordination",
+      "governance",
+      "unrelated"
+    ],
+    "independent": [
+      "reporting",
+      "support",
+      "cloud",
+      "dataQuality",
+      "coordination",
+      "governance",
+      "unrelated"
+    ],
+    "governance": [
+      "reporting",
+      "support",
+      "cloud",
+      "dataQuality",
+      "coordination",
+      "governance",
+      "unrelated"
+    ]
+  },
+  "unrelatedTolerance": 0.04
+}
