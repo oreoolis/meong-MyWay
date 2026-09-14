@@ -129,16 +129,22 @@ graph TD
     apiAnalysis --> orchestrator
     apiSwap --> orchestrator
 
-    subgraph agents["🤖 Five Bedrock Agents"]
+    subgraph agents["🤖 Six Bedrock Agents"]
         parser["1 · Resume Parser"]
-        planner["2 · Career Planner"]
-        improver["3 · Resume Improver"]
-        advisor["4 · Industry Advisor"]
-        swapper["5 · Career Swapper<br/>(separate request)"]
+        context["2 · Context Agent"]
+        answers["User answers or skip"]
+        embedding["1 · Resume Parser: final embedding"]
+        planner["3 · Career Planner"]
+        improver["4 · Resume Improver"]
+        advisor["5 · Industry Advisor"]
+        swapper["6 · Career Swapper<br/>(separate request)"]
     end
 
     orchestrator --> parser
-    parser --> planner
+    parser -->|profile| context
+    context -->|questions| answers
+    answers -->|confirmed evidence + base text| embedding
+    embedding -->|profile + vector| planner
     planner --> improver & advisor
     planner -.->|"routing read back<br/>from DynamoDB"| swapper
 
@@ -274,7 +280,7 @@ sequenceDiagram
     FE-->>User: Routed to Upload stage
 ```
 
-### Resume upload to five-agent analysis
+### Resume upload through context and career analysis
 
 Note the split at the end. **Agents 1 to 4 run in the POST the user waits on; agent 5 runs in a second request the results screen fires for itself.** Why: [Latency](#latency-why-agent-5-runs-separately).
 
@@ -286,6 +292,7 @@ sequenceDiagram
     participant S3
     participant DDB_R as DynamoDB (resumes)
     participant AnalysisAPI as /api/analysis
+    participant IntakeAPI as /api/analysis/intake
     participant SwapAPI as /api/analysis/swap
     participant Orc as Orchestrator
     participant Bedrock
@@ -300,11 +307,19 @@ sequenceDiagram
     ResumeAPI->>DDB_R: Put pointer + metadata (one row per user)
     ResumeAPI-->>FE: 201 stored
 
-    FE->>AnalysisAPI: POST /api/analysis (no body, resume looked up by caller's sub)
-    AnalysisAPI->>Orc: runAnalysis(resume)
-
-    Orc->>Bedrock: Agent 1, parse + embed (Converse, native PDF/DOCX)
-    Bedrock-->>Orc: ResumeProfile + embedding vector
+    FE->>IntakeAPI: POST { resumeId } (verified caller's sub)
+    IntakeAPI->>Bedrock: Parse document without embedding
+    Bedrock-->>IntakeAPI: Structured profile + base evidence text
+    IntakeAPI->>DDB_A: Persist versioned intake, bound to exact resumeId
+    IntakeAPI->>Bedrock: Select meaningful gaps and review canonical MCQs
+    IntakeAPI->>DDB_A: Persist 2–3 questions, or empty fallback
+    IntakeAPI-->>FE: Profile + questionnaire (IDs and labels)
+    FE-->>User: Optional questionnaire
+    User->>FE: Select factual answers, leave unanswered, or skip
+    FE->>AnalysisAPI: POST { intakeId, resumeId, version, selections }
+    AnalysisAPI->>DDB_A: Validate IDs and claim submission lease
+    AnalysisAPI->>Bedrock: Embed base evidence + selected factual statements
+    AnalysisAPI->>Orc: runAnalysis(resume, prepared profile + enriched vector)
     Orc->>DDB_A: Store profile + embedding (before handoff)
 
     Orc->>Bedrock: Agent 2, Career Planner (trajectory + paths)
@@ -361,21 +376,22 @@ sequenceDiagram
 
 ---
 
-## The five agents
+## The six agents
 
 | # | Agent | File | Reads | Produces |
 |---|-------|------|-------|----------|
-| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes (Bedrock document block) | Structured `ResumeProfile` plus a Titan embedding |
-| 2 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan`: current trajectory and ranked paths |
-| 3 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | Quoted, line-level rewrites with impact ratings |
-| 4 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
-| 5 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations, portable skills, coach referrals |
+| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes (Bedrock document block) | Parsed profile at intake; final Titan embedding after questionnaire submission |
+| 2 | Context Agent | `lib/agents/resume-context.ts` | Parsed profile | Reviewed optional questions and token usage |
+| 3 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan`: current trajectory and ranked paths |
+| 4 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | Quoted, line-level rewrites with impact ratings |
+| 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
+| 6 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations, portable skills, coach referrals |
 
-Agents 2, 4 and 5 additionally get live vacancies attached to whatever they produce — paths, matched roles, destinations — by `lib/jobs/matching.ts`. That step is deterministic and makes no model call; see [Live openings](#live-openings-why-matching-is-not-a-sixth-agent).
+Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 4 and 5 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 6 sits deliberately outside that fan-out.
 
-Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 3 and 4 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 5 sits deliberately outside that fan-out.
+The upload flow pauses at an optional résumé questionnaire before embedding and analysis. See [questionnaire architecture, validation and evaluation](docs/resume-questionnaire.md) for API contracts, expiry, retries, deployment implications and test results.
 
-### Latency: why agent 5 runs separately
+### Latency: why the swapper runs separately
 
 Measured end to end against a real resume:
 

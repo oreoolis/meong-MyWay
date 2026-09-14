@@ -127,7 +127,7 @@ data "aws_iam_policy_document" "agent_runtime" {
 
   statement {
     sid       = "ReadResumeMetadata"
-    actions   = ["dynamodb:GetItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:ConditionCheckItem"]
     resources = [aws_dynamodb_table.resumes.arn]
   }
 
@@ -135,6 +135,7 @@ data "aws_iam_policy_document" "agent_runtime" {
     sid = "WriteAnalyses"
     actions = [
       "dynamodb:GetItem",
+      "dynamodb:ConditionCheckItem",
       "dynamodb:PutItem",
       "dynamodb:Query",
       "dynamodb:BatchWriteItem",
