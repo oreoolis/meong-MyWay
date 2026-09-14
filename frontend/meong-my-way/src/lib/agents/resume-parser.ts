@@ -94,6 +94,46 @@ type ParserPayload = {
   embeddingText?: string;
 };
 
+type QuestionnaireRefinement = {
+  summary?: string;
+  embeddingText?: string;
+};
+
+const QUESTIONNAIRE_SYSTEM = `You are the Resume Parser finalization step. Refine a parsed resume using the candidate's validated questionnaire answers.
+
+Rules:
+- Treat the parsed resume and questionnaire responses as the only factual sources.
+- Use each answer only for the exact skill, role, time range, context, or scope named in its question.
+- Do not infer related tools, skills, seniority, employers, dates, achievements, preferences, or qualifications.
+- Preserve uncertainty and negative answers. Never turn "never", limited use, or guided use into proficiency.
+- The summary must accurately describe the candidate's demonstrated and self-reported skills and experience in 2–4 concise sentences.
+- The embeddingText must be 150–250 words of plain prose for semantic matching. Include relevant questionnaire evidence without exaggeration. Use no headings, bullets, name, or employer names.
+- Return only the requested JSON object.`;
+
+function questionnairePrompt(parsed: ParsedResume, evidence: QuestionnaireEvidence[]): string {
+  return `Refine this parsed resume using the validated questionnaire responses.
+
+Return exactly:
+{
+  "summary": string,
+  "embeddingText": string
+}
+
+Parsed profile:
+${JSON.stringify(parsed.profile)}
+
+Base embedding text:
+${JSON.stringify(parsed.embeddingText)}
+
+Validated questionnaire responses:
+${JSON.stringify(evidence.map(item => ({
+    question: item.question,
+    answer: item.answer,
+    factualStatement: item.statement,
+    category: item.category,
+  })))}`;
+}
+
 export type ParseResult = {
   profile: ResumeProfile;
   embedding: ResumeEmbedding;
@@ -211,15 +251,42 @@ export async function parseResumeProfile(
   return { profile, embeddingText, usage };
 }
 
-/** The intake profile stays immutable; self-reported evidence has its own provenance. */
+/** Refine derived prose with self-reported evidence, then create the final vector. */
 export async function embedParsedResume(parsed: ParsedResume, evidence: QuestionnaireEvidence[] = []): Promise<ParseResult> {
-  const embeddingText = enrichedEmbeddingText(parsed.embeddingText, evidence);
+  let summary = parsed.profile.summary;
+  let embeddingText = parsed.embeddingText;
+  let refinementUsage: ModelUsage = { inputTokens: 0, outputTokens: 0 };
+
+  if (evidence.length) {
+    const refinement = await reasonJson<QuestionnaireRefinement>({
+      agent: "parser-questionnaire",
+      system: QUESTIONNAIRE_SYSTEM,
+      prompt: questionnairePrompt(parsed, evidence),
+      maxTokens: 1200,
+    });
+    refinementUsage = refinement.usage;
+    summary = refinement.value.summary?.trim() || summary;
+    embeddingText = refinement.value.embeddingText?.trim() || embeddingText;
+  }
+
+  // Keep every accepted fact in the final semantic input even if the model
+  // accidentally paraphrases or omits one while rewriting the narrative.
+  const missingEvidence = evidence.filter(item => !embeddingText.includes(item.statement));
+  embeddingText = enrichedEmbeddingText(embeddingText, missingEvidence);
   const embedding = await embedResumeText(embeddingText);
-  const profile: ResumeProfile = { ...parsed.profile,
+  const profile: ResumeProfile = { ...parsed.profile, summary,
     ...(evidence.length ? { questionnaireEvidence: evidence } : {}),
     embedding: { model: embedding.model, dimensions: embedding.dimensions, chunks: 1, tokensProcessed: embedding.inputTokens, vectorPreview: embedding.vector.slice(0, 8) },
   };
-  return { profile, embedding, embeddingText, usage: parsed.usage };
+  return {
+    profile,
+    embedding,
+    embeddingText,
+    usage: {
+      inputTokens: parsed.usage.inputTokens + refinementUsage.inputTokens,
+      outputTokens: parsed.usage.outputTokens + refinementUsage.outputTokens,
+    },
+  };
 }
 
 /** Résumé-only compatibility for offline/integration callers. HTTP uses persisted intake. */

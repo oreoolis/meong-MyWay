@@ -52,6 +52,10 @@ export type PendingResumeIntake = {
   questionnaire: ResumeQuestionnaire;
   parsed: ParsedResume;
   generationUsage: ModelUsage;
+  /** False while the parsed-profile checkpoint is waiting for question generation. */
+  questionsGenerated?: boolean;
+  /** Invalidates cached questionnaires when generation/review behavior changes. */
+  questionGenerationVersion?: number;
   submissionKey?: string;
   leaseToken?: string;
   leaseUntil?: number;

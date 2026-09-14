@@ -26,7 +26,7 @@ it("runs intake, completion, replay, deferred swap and invalidation with synthet
     expect(before.embedding).toBeUndefined();
     expect(before.plan).toBeUndefined();
     // This fixture has listed tools without usage context; exercise the actual
-    // questionnaire path. Generation-unavailable fallback is covered separately.
+    // questionnaire path through generation and review.
     expect([2, 3]).toContain(intake.questionnaire.questions.length);
     const q = intake.questionnaire.questions[0];
     const submission = { intakeId: intake.questionnaire.intakeId, resumeId: resume.resumeId, version: 1 as const, selections: q ? [{ questionId: q.id, optionId: q.options[2].id }] : [] };

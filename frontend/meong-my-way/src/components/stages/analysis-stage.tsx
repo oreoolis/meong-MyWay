@@ -18,7 +18,7 @@ import type { PipelinePhase } from "@/lib/resume/pipeline";
 import type { StoredResume } from "@/lib/resume/types";
 import { cn, formatBytes } from "@/lib/utils";
 
-/** The three-agent story shown during questionnaire preparation and analysis. */
+/** Agent metadata shared by the questionnaire and analysis graphics. */
 const AGENT_META: Record<
   AgentId,
   { name: string; agentNumber: number; role: string; icon: React.ReactNode }
@@ -250,7 +250,7 @@ export function AnalysisStage({
   phase: PipelinePhase;
   storageSteps: AgentStep[];
   storedResume: StoredResume | null;
-  /** Reuse the pipeline UI before questionnaire submission, with downstream work queued. */
+  /** Reuse the pipeline UI before questionnaire submission. */
   preparingContext?: boolean;
 }) {
   const extractionSteps = agentSteps.parser.filter(step => step.key !== "embed");
@@ -264,7 +264,7 @@ export function AnalysisStage({
 
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
-      <SectionLabel>{preparingContext ? "Step 2 · Context" : "Step 3"}</SectionLabel>
+      <SectionLabel>{preparingContext ? "Step 2 · Questionnaire" : "Step 3"}</SectionLabel>
       <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
         {preparingContext ? "Preparing your questionnaire" : "Your resume, moving down the line"}
       </h1>
@@ -313,15 +313,16 @@ export function AnalysisStage({
             <AgentNode agent="parser" steps={parserSteps} state={parserState} />
             <Trunk flowing={parserState === "done"} carrying={carrying.toQuestionnaire} className="h-12" />
             <AgentNode agent="context" steps={agentSteps.context} state={agentState.context} />
-            <Trunk flowing={false} className="h-12" />
           </>
         ) : null}
-        <AgentNode
-          agent="planner"
-          steps={downstreamQueued ? [] : agentSteps.planner}
-          state={downstreamQueued ? "idle" : agentState.planner}
-          className={downstreamQueued ? "grayscale" : undefined}
-        />
+        {!preparingContext ? (
+          <AgentNode
+            agent="planner"
+            steps={downstreamQueued ? [] : agentSteps.planner}
+            state={downstreamQueued ? "idle" : agentState.planner}
+            className={downstreamQueued ? "grayscale" : undefined}
+          />
+        ) : null}
 
         {!preparingContext ? (
           <>

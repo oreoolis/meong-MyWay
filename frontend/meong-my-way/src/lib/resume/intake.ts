@@ -10,42 +10,59 @@ import { publicQuestionnaire, QuestionnaireError, resolveSubmission } from "./qu
 import { lockIntake, saveIntake, unlockIntake } from "./intake-store";
 import type { IntakeResponse, PendingResumeIntake } from "./questionnaire-types";
 
+const QUESTION_GENERATION_VERSION = 4;
+
 export async function beginIntake(userId: string, resumeId: unknown, onProgress?: ProgressReporter): Promise<IntakeResponse> {
   const resume = await getResume(userId);
   if (!resume || resume.resumeId !== resumeId) throw new QuestionnaireError("The résumé has changed. Upload or select it again.", 409);
   let intake = (await getAnalysis(userId)).intake;
-  if (!intake) {
+  const generationFinished = (value: PendingResumeIntake | undefined) => Boolean(
+    value?.submissionKey !== undefined ||
+      value?.result ||
+    (value?.questionGenerationVersion === QUESTION_GENERATION_VERSION &&
+      value.questionsGenerated &&
+      value.questionnaire.questions.length >= 2),
+  );
+  if (!generationFinished(intake)) {
     const token = await lockIntake(userId, resume.resumeId);
     try {
       const existing = (await getAnalysis(userId)).intake;
-      if (existing) return { profile: existing.parsed.profile, questionnaire: publicQuestionnaire(existing.questionnaire) };
-      onProgress?.("parsing");
-      const parsed = await parseResumeProfile(resume, await readResumeBytes(resume));
-      // Persist parsing before generation so a recoverable generation/storage
-      // error never requires re-reading the document on the next request.
-      const initial: PendingResumeIntake = {
-        parsed,
-        generationUsage: { inputTokens: 0, outputTokens: 0 },
-        leaseToken: "",
-        leaseUntil: 0,
-        questionnaire: {
-          intakeId: randomUUID(), resumeId: resume.resumeId, version: 1,
-          expiresAt: Math.floor(Date.now() / 1000) + 30 * 86400, questions: [],
-        },
-      };
-      await saveIntake(userId, initial);
+      if (generationFinished(existing)) return { profile: existing!.parsed.profile, questionnaire: publicQuestionnaire(existing!.questionnaire) };
+      let checkpoint = existing;
+      if (!checkpoint) {
+        onProgress?.("parsing");
+        const parsed = await parseResumeProfile(resume, await readResumeBytes(resume));
+        // Persist parsing before generation so a recoverable generation/storage
+        // error never requires re-reading the document on the next request.
+        checkpoint = {
+          parsed,
+          generationUsage: { inputTokens: 0, outputTokens: 0 },
+          questionsGenerated: false,
+          questionGenerationVersion: QUESTION_GENERATION_VERSION,
+          leaseToken: "",
+          leaseUntil: 0,
+          questionnaire: {
+            intakeId: randomUUID(), resumeId: resume.resumeId, version: 1,
+            expiresAt: Math.floor(Date.now() / 1000) + 30 * 86400, questions: [],
+          },
+        };
+        await saveIntake(userId, checkpoint);
+      }
       onProgress?.("context");
-      const generated = await generateResumeContext(parsed.profile);
+      const generated = await generateResumeContext(checkpoint.parsed.profile);
       intake = {
-        ...initial,
+        ...checkpoint,
         generationUsage: generated.usage,
-        questionnaire: { ...initial.questionnaire, questions: generated.questions },
+        questionsGenerated: true,
+        questionGenerationVersion: QUESTION_GENERATION_VERSION,
+        questionnaire: { ...checkpoint.questionnaire, questions: generated.questions },
       };
-      await saveIntake(userId, intake, initial);
+      await saveIntake(userId, intake, checkpoint);
     } finally {
       await unlockIntake(userId, token);
     }
   }
+  if (!intake) throw new Error("Questionnaire intake was not created.");
   return { profile: intake.parsed.profile, questionnaire: publicQuestionnaire(intake.questionnaire) };
 }
 
