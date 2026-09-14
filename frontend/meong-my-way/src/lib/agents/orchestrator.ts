@@ -3,22 +3,23 @@ import "server-only";
 import type { AnalysisBundle, CareerSwap, RunCost } from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
 import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
-import { readResumeBytes } from "@/lib/resume/store";
+import { getResume, readResumeBytes } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
 import { hasSsgCredentials } from "@/lib/ssg/oauth";
 
 import { adviseOnIndustry } from "./industry-advisor";
 import { findCareerSwaps } from "./career-swapper";
 import { improveResume } from "./resume-improver";
-import { parseResume } from "./resume-parser";
+import { parseResume, type ParseResult } from "./resume-parser";
 import { planCareers } from "./career-planner";
 import { estimateCost } from "./cost";
-import { getAnalysis, putAnalysisArtifact } from "./store";
+import { getAnalysis, putAnalysisArtifact as storeArtifact } from "./store";
 
 /**
  * The pipeline, in the shape of the architecture diagram.
  *
- *   parser ──▶ (store) ──▶ planner ──┬──▶ improver
+ *   parse ──▶ stored intake ──▶ optional questionnaire ──▶ embed
+ *   embed ──▶ (store) ──▶ planner ──┬──▶ improver
  *                                    ├──▶ advisor
  *                                    └╌╌▶ swapper   (deferred — see below)
  *
@@ -93,19 +94,27 @@ function sumUsage(entries: (ModelUsage | undefined)[]): ModelUsage {
 export async function runAnalysis(
   resume: StoredResume,
   onProgress?: PipelineProgress,
+  prepared?: { parsed: ParseResult; leaseToken: string; expiresAt: number },
 ): Promise<AnalysisBundle> {
+  // Serialise writes sharing transaction guards; the specialists themselves
+  // still run concurrently and retain their independent failure handling.
+  let writes = Promise.resolve();
+  const putAnalysisArtifact: typeof storeArtifact = input => {
+    writes = writes.then(() => storeArtifact({ ...input, resumeId: resume.resumeId, ...(prepared ? { leaseToken: prepared.leaseToken } : {}) }));
+    return writes;
+  };
   const bytes = await readResumeBytes(resume);
   const document = { format: resume.format, bytes };
 
   /* --- Agent 1: parse and embed ---------------------------------------- */
 
-  onProgress?.({ phase: "parsing" });
-  const parsed = await parseResume(resume, bytes);
+  if (!prepared) onProgress?.({ phase: "parsing" });
+  const parsed = prepared?.parsed ?? await parseResume(resume, bytes);
 
   /* --- Store before the handoff, exactly as the diagram requires -------- */
 
   onProgress?.({ phase: "storing" });
-  const expiresAt = expiryTimestamp();
+  const expiresAt = prepared?.expiresAt ?? expiryTimestamp();
 
   // The vector is written separately from the profile: it is by far the
   // largest artefact and the only one nothing but the matcher reads, so
@@ -290,7 +299,10 @@ export async function runAnalysis(
  * failing, which throws.
  */
 export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
+  const resume = await getResume(userId);
+  if (!resume) return null;
   const stored = await getAnalysis(userId);
+  if (stored.intake && !stored.intake.result) return null;
 
   if (!stored.profile || !stored.embedding || !stored.routing) {
     console.warn(
@@ -325,8 +337,9 @@ export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
       }
     : result.swap;
 
-  await putAnalysisArtifact({
+  await storeArtifact({
     userId,
+    resumeId: resume.resumeId,
     artifact: "swapper",
     expiresAt: expiryTimestamp(),
     payload: swap,

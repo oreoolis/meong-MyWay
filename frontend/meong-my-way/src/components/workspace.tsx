@@ -18,7 +18,9 @@ import {
 } from "@/lib/auth/client";
 import { fetchAnalysis, requestCareerSwap, toAnalysisBundle } from "@/lib/analysis/client";
 import { deleteStoredResume, fetchStoredResume } from "@/lib/resume/client";
-import { runResumePipeline, type PipelinePhase } from "@/lib/resume/pipeline";
+import { runResumePipeline, type PipelinePhase, type PipelineCache } from "@/lib/resume/pipeline";
+import type { IntakeResponse, QuestionnaireSelection, QuestionnaireSubmission } from "@/lib/resume/questionnaire-types";
+import { QuestionnaireStage } from "./stages/questionnaire-stage";
 import type { StoredResume } from "@/lib/resume/types";
 
 import { AppHeader, STEPS } from "./app-header";
@@ -33,7 +35,7 @@ import {
 import { AdvisorStage } from "./stages/advisor-stage";
 import { TransitionerStage } from "./stages/transitioner-stage";
 
-type Stage = "landing" | "signin" | "upload" | "analysis" | "results";
+type Stage = "landing" | "signin" | "upload" | "intake" | "questionnaire" | "analysis" | "results";
 
 /** Derive an agent's card state from its own step list. */
 function cardState(steps: AgentStep[]): AgentCardState {
@@ -45,6 +47,7 @@ function cardState(steps: AgentStep[]): AgentCardState {
 /** Every agent starts with an empty trace, which `cardState` reads as idle. */
 const NO_STEPS: Record<AgentId, AgentStep[]> = {
   parser: [],
+  context: [],
   planner: [],
   improver: [],
   advisor: [],
@@ -69,6 +72,10 @@ export function Workspace() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deletingResume, setDeletingResume] = useState(false);
+  const [intake, setIntake] = useState<IntakeResponse | null>(null);
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const pipelineCache = useRef<PipelineCache>({});
+  const answerRef = useRef<((submission: QuestionnaireSubmission) => void) | null>(null);
 
   /**
    * The career swapper's own request, tracked apart from `analysis.swap`.
@@ -159,6 +166,7 @@ export function Workspace() {
 
     try {
       const { swap, cost } = await requestCareerSwap(controller.signal);
+      if (controller.signal.aborted) return;
 
       setAnalysis((prev) =>
         prev
@@ -205,7 +213,7 @@ export function Workspace() {
       setUploadError(null);
       setPhase("uploading");
       setBusy(true);
-      setStage("analysis");
+      setStage("intake");
 
       try {
         await runResumePipeline(
@@ -213,11 +221,24 @@ export function Workspace() {
           {
             onAgentSteps: report,
             onStorageSteps: setStorageSteps,
-            onPhase: setPhase,
+            onPhase: next => { setPhase(next); if (next === "embedding") setStage("analysis"); },
             onStored: setStoredResume,
             onAnalysis: setAnalysis,
+            onIntake: setIntake,
+            onQuestionnaire: next => new Promise<QuestionnaireSubmission>((resolve, reject) => {
+              setIntake(next);
+              setStage("questionnaire");
+              setBusy(false);
+              const cancel = () => { answerRef.current = null; reject(new DOMException("Cancelled", "AbortError")); };
+              controller.signal.addEventListener("abort", cancel, { once: true });
+              answerRef.current = submission => {
+                controller.signal.removeEventListener("abort", cancel);
+                resolve(submission);
+              };
+            }),
           },
           controller.signal,
+          pipelineCache.current,
         );
 
         await sleep(400, controller.signal);
@@ -227,7 +248,7 @@ export function Workspace() {
         // this: the advisor branch is fully usable while it runs.
         void startCareerSwap();
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (controller.signal.aborted) return;
 
         const message =
           err instanceof Error
@@ -246,7 +267,7 @@ export function Workspace() {
           setError(message);
         }
       } finally {
-        setBusy(false);
+        if (abortRef.current === controller) setBusy(false);
       }
     },
     [report, startCareerSwap],
@@ -277,6 +298,10 @@ export function Workspace() {
       setError(null);
       setUploadError(null);
       setStage("landing");
+      pipelineCache.current = {};
+      setIntake(null);
+      setSelections({});
+      setBusy(false);
     }
   }
 
@@ -310,6 +335,9 @@ export function Workspace() {
 
   function handleAnalyze() {
     if (!file) return;
+    pipelineCache.current = {};
+    setIntake(null);
+    setSelections({});
     // Uploading is the consent: the file is kept on the account either way, so
     // the upload step no longer asks a question it would not accept a no to.
     setSession((prev) => (prev ? { ...prev, storageConsent: true } : prev));
@@ -328,6 +356,10 @@ export function Workspace() {
     setError(null);
     setUploadError(null);
     setStage("upload");
+    setBusy(false);
+    pipelineCache.current = {};
+    setIntake(null);
+    setSelections({});
   }
 
   function handleHome() {
@@ -350,7 +382,7 @@ export function Workspace() {
     setStage("signin");
   }
 
-  const activeIndex = STEPS.findIndex((s) => s.key === stage);
+  const activeIndex = STEPS.findIndex((s) => s.key === (stage === "intake" ? "questionnaire" : stage));
   const isPreAuth = stage === "landing" || stage === "signin";
   // Upload runs edge to edge: its right-hand panel is a full-height split, not
   // content sitting inside the centred column the other stages share.
@@ -400,11 +432,21 @@ export function Workspace() {
           />
         ) : null}
 
-        {stage === "analysis" ? (
+        {stage === "questionnaire" && intake ? <QuestionnaireStage questionnaire={intake.questionnaire} selections={selections} onChange={setSelections} busy={busy} error={error} onContinue={(answers: QuestionnaireSelection[]) => {
+          const resolve = answerRef.current;
+          if (!resolve) return;
+          answerRef.current = null;
+          setBusy(true);
+          resolve({ intakeId: intake.questionnaire.intakeId, resumeId: intake.questionnaire.resumeId, version: intake.questionnaire.version, selections: answers });
+        }} /> : null}
+
+        {stage === "intake" || stage === "analysis" ? (
           <AnalysisStage
+            preparingContext={stage === "intake"}
             agentSteps={agentSteps}
             agentState={{
               parser: cardState(agentSteps.parser),
+              context: cardState(agentSteps.context),
               planner: cardState(agentSteps.planner),
               improver: cardState(agentSteps.improver),
               advisor: cardState(agentSteps.advisor),
@@ -413,6 +455,7 @@ export function Workspace() {
             profile={analysis?.profile ?? null}
             error={error}
             onRetry={() => file && void runPipeline(file)}
+            onStartOver={handleStartOver}
             phase={phase}
             storageSteps={storageSteps}
             storedResume={storedResume}

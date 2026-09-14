@@ -2,6 +2,8 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+The post-upload flow is **upload → Resume Parser (profile) → Context Agent (questions) → user answers or skip → Resume Parser (final embedding) → career analysis → results**. See [the questionnaire guide](../../docs/resume-questionnaire.md) for contracts, persistence, deployment and validation. Unit tests run with `npm test`; live AWS tests are opt-in with `npm run test:integration`.
+
 Navigate to the correct directory:
 
 ```bash

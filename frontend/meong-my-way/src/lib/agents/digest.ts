@@ -52,6 +52,9 @@ export function profileDigest(profile: ResumeProfile): string {
     `Skills: ${skills || "none extracted"}`,
     `Experience:\n${experience || "  none extracted"}`,
     `Education: ${education || "none extracted"}`,
+    profile.questionnaireEvidence?.length
+      ? `Candidate questionnaire responses (self-reported; not in the uploaded document; do not infer related skills or treat as preferences):\n${profile.questionnaireEvidence.map(e => e.question && e.answer ? `  Question: ${e.question}\n  Answer: ${e.answer}` : `  Answer: ${e.statement}`).join("\n")}`
+      : null,
     profile.certifications.length
       ? `Certifications: ${profile.certifications.join(", ")}`
       : null,

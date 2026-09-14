@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentId, AgentStep } from "@/lib/contracts";
 
 import type { StoredResume } from "./types";
+import type { PipelineCache } from "./pipeline";
 
 /**
  * What the screen is allowed to claim when a run dies early.
@@ -15,13 +16,14 @@ import type { StoredResume } from "./types";
  * otherwise.
  */
 
-const { uploadResume, runAnalysis } = vi.hoisted(() => ({
+const { uploadResume, runAnalysis, requestResumeIntake } = vi.hoisted(() => ({
   uploadResume: vi.fn(),
   runAnalysis: vi.fn(),
+  requestResumeIntake: vi.fn(),
 }));
 
 vi.mock("./client", () => ({ uploadResume }));
-vi.mock("@/lib/analysis/client", () => ({ runAnalysis }));
+vi.mock("@/lib/analysis/client", () => ({ runAnalysis, requestResumeIntake }));
 
 const { runResumePipeline } = await import("./pipeline");
 
@@ -46,6 +48,8 @@ function recorder() {
     announced,
     phases,
     events: {
+      onIntake: vi.fn(),
+      onQuestionnaire: vi.fn(),
       onAgentSteps: (agent: AgentId, steps: AgentStep[]) => {
         void steps;
         if (!announced.includes(agent)) announced.push(agent);
@@ -59,14 +63,15 @@ function recorder() {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   uploadResume.mockResolvedValue({ resume: STORED, replacedResumeId: null });
+  requestResumeIntake.mockResolvedValue({ profile: {}, questionnaire: { intakeId: "i1", resumeId: "r1", version: 1, questions: [] } });
 });
 
 describe("runResumePipeline, when the document is rejected", () => {
   it("throws the server's error rather than swallowing it", async () => {
     const rejection = new Error("That file does not look like a resume.");
-    runAnalysis.mockRejectedValue(rejection);
+    requestResumeIntake.mockRejectedValue(rejection);
 
     const { events } = recorder();
 
@@ -76,7 +81,7 @@ describe("runResumePipeline, when the document is rejected", () => {
   });
 
   it("never announces an agent that the failed run will not reach", async () => {
-    runAnalysis.mockRejectedValue(new Error("not a resume"));
+    requestResumeIntake.mockRejectedValue(new Error("not a resume"));
 
     const { announced, events } = recorder();
 
@@ -92,7 +97,7 @@ describe("runResumePipeline, when the document is rejected", () => {
   });
 
   it("stops at the phase it failed on", async () => {
-    runAnalysis.mockRejectedValue(new Error("not a resume"));
+    requestResumeIntake.mockRejectedValue(new Error("not a resume"));
 
     const { phases, events } = recorder();
 
@@ -106,7 +111,7 @@ describe("runResumePipeline, when the document is rejected", () => {
   });
 
   it("gives up promptly instead of waiting out the narration timer", async () => {
-    runAnalysis.mockRejectedValue(new Error("not a resume"));
+    requestResumeIntake.mockRejectedValue(new Error("not a resume"));
 
     const { events } = recorder();
     const started = Date.now();
@@ -124,6 +129,56 @@ describe("runResumePipeline, when the document is rejected", () => {
 });
 
 describe("runResumePipeline, when the run succeeds", () => {
+  it("starts career agents only when the server reports their phase", async () => {
+    const { events, announced, phases } = recorder();
+    requestResumeIntake.mockImplementation(async (_id, _signal, report) => {
+      report("context");
+      expect(announced).toEqual(["parser", "context"]);
+      return { questionnaire: { intakeId: "i1", resumeId: "r1", version: 1, questions: [] } };
+    });
+    runAnalysis.mockImplementation(async (_signal, _submission, report) => {
+      expect(announced).toEqual(["parser", "context"]);
+      report("planning");
+      expect(announced).toEqual(["parser", "context", "planner"]);
+      report("specialists");
+      return {};
+    });
+    await runResumePipeline(new File(["x"], "resume.pdf"), events, new AbortController().signal);
+    expect(phases.slice(2)).toEqual(["parsing", "context", "answering", "embedding", "planning", "specialists", "complete"]);
+  });
+
+  it("waits for questionnaire submission before embedding or downstream analysis", async () => {
+    const intake = { profile: {}, questionnaire: { intakeId: "i1", resumeId: "r1", version: 1, questions: [{ id: "q1" }, { id: "q2" }] } };
+    requestResumeIntake.mockResolvedValue(intake);
+    runAnalysis.mockResolvedValue({});
+    const { events, phases } = recorder();
+    let answer!: (value: unknown) => void;
+    events.onQuestionnaire.mockImplementation(() => new Promise(resolve => { answer = resolve; }));
+    const cache: PipelineCache = {};
+    const pending = runResumePipeline(new File(["x"], "resume.pdf"), events, new AbortController().signal, cache);
+    await vi.waitFor(() => expect(events.onQuestionnaire).toHaveBeenCalledWith(intake), { timeout: 1500 });
+    expect(runAnalysis).not.toHaveBeenCalled();
+    expect(phases).not.toContain("handoff");
+    const submission = { intakeId: "i1", resumeId: "r1", version: 1, selections: [{ questionId: "q1", optionId: "o1" }] };
+    answer(submission);
+    await pending;
+    expect(runAnalysis).toHaveBeenCalledWith(expect.any(AbortSignal), submission, expect.any(Function));
+    // Retrying the same flow reuses uploaded document, parsed profile and IDs.
+    await runResumePipeline(new File(["x"], "resume.pdf"), events, new AbortController().signal, cache);
+    expect(uploadResume).toHaveBeenCalledTimes(1);
+    expect(requestResumeIntake).toHaveBeenCalledTimes(1);
+    expect(events.onQuestionnaire).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels before analysis when aborted during questionnaire", async () => {
+    requestResumeIntake.mockResolvedValue({ questionnaire: { questions: [{ id: "q" }] } });
+    const { events } = recorder();
+    const controller = new AbortController();
+    events.onQuestionnaire.mockImplementation(async () => { controller.abort(); return {}; });
+    await expect(runResumePipeline(new File(["x"], "resume.pdf"), events, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(runAnalysis).not.toHaveBeenCalled();
+  });
+
   it("completes every agent it narrated and hands back both halves", async () => {
     const analysis = { profile: { candidateName: "Ada" } };
     runAnalysis.mockResolvedValue(analysis);
@@ -138,7 +193,7 @@ describe("runResumePipeline, when the run succeeds", () => {
 
     expect(result.resume).toBe(STORED);
     expect(result.analysis).toBe(analysis);
-    expect(announced).toEqual(["parser", "planner", "improver", "advisor"]);
+    expect(announced).toEqual(["parser", "context", "planner", "improver", "advisor"]);
     expect(phases.at(-1)).toBe("complete");
   });
 

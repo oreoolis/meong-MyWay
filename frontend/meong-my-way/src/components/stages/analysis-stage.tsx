@@ -18,28 +18,7 @@ import type { PipelinePhase } from "@/lib/resume/pipeline";
 import type { StoredResume } from "@/lib/resume/types";
 import { cn, formatBytes } from "@/lib/utils";
 
-/**
- * The analysis screen: the pipeline drawn as the tree it actually is.
- *
- *              Resume Store
- *                   │
- *              Resume Parser            agent 1
- *                   │
- *              Career Planner           agent 2
- *          ┌────────┼────────┐
- *      Improver  Advisor  Swapper       agents 3, 4, 5
- *
- * Laid out top-down because that is the real shape of the run, and because the
- * two facts a person watching most wants are exactly the ones a flat list
- * hides: that nothing starts until the resume is stored, and that the last
- * three agents run at the same time rather than in a queue.
- *
- * Previously only the parser and planner were drawn, with the three
- * specialists folded into the planner's card — so a five-agent pipeline
- * presented as two workers, and the agents doing the market research the
- * results screen is built on were invisible while they ran.
- */
-
+/** The three-agent story shown during questionnaire preparation and analysis. */
 const AGENT_META: Record<
   AgentId,
   { name: string; agentNumber: number; role: string; icon: React.ReactNode }
@@ -47,84 +26,62 @@ const AGENT_META: Record<
   parser: {
     name: "Resume Parser",
     agentNumber: 1,
-    role: "reads and embeds the document",
+    role: "extracts the profile from your résumé",
     icon: <DocumentIcon className="h-4.5 w-4.5" />,
+  },
+  context: {
+    name: "Questionnaire Agent", agentNumber: 2,
+    role: "selects and reviews useful questions",
+    icon: <SparkIcon className="h-4.5 w-4.5" />,
   },
   planner: {
     name: "Career Planner",
-    agentNumber: 2,
+    agentNumber: 3,
     role: "maps progression and alternatives",
     icon: <RouteIcon className="h-4.5 w-4.5" />,
   },
   improver: {
     name: "Resume Improver",
-    agentNumber: 3,
+    agentNumber: 4,
     role: "rewrites your weakest lines",
     icon: <SparkIcon className="h-4.5 w-4.5" />,
   },
   advisor: {
     name: "Industry Advisor",
-    agentNumber: 4,
+    agentNumber: 5,
     role: "scores roles in your sector",
     icon: <TrendUpIcon className="h-4.5 w-4.5" />,
   },
   swapper: {
     name: "Career Swapper",
-    agentNumber: 5,
-    role: "finds routes out of your sector",
+    agentNumber: 6,
+    role: "runs later on the results screen",
     icon: <RouteIcon className="h-4.5 w-4.5" />,
   },
 };
 
-const SPECIALISTS: AgentId[] = ["improver", "advisor", "swapper"];
-
-/**
- * What each edge carries, which is not the same thing on every edge.
- *
- * The document only ever travels the first one. What leaves the parser is what
- * the parser made — the extracted fields and the vector — and what leaves the
- * planner is the plan. Sending a manila folder all the way down would say the
- * PDF reaches the advisors, and it does not: nothing past the parser reads it.
- */
-const FROM_STORE = ["file"] as const;
 const FROM_PARSER = ["bits", "vector"] as const;
 const FROM_PLANNER = ["plan"] as const;
+const SPECIALISTS: AgentId[] = ["improver", "advisor", "swapper"];
 
 export type EdgeCargo = {
   toParser?: readonly CargoKind[];
+  toQuestionnaire?: readonly CargoKind[];
   toPlanner?: readonly CargoKind[];
-  toSpecialists?: readonly CargoKind[];
+  toDownstream?: readonly CargoKind[];
 };
 
-/**
- * Which branch is carrying work right now, and what it is carrying.
- *
- * Read off the phase rather than off the agent cards, and that is a fix rather
- * than a preference. The old rule asked for the node above to be `done` and
- * the one below to be `running`, which only the first edge could ever satisfy:
- * an agent's narration deliberately stops one step short of complete, so no
- * agent reads as `done` until the whole request returns — at which point all
- * four flip together and nothing is `running` any more. The parser was never
- * `done` while the planner worked, so the lower two edges sat still for the
- * entire run and the folder never left the first one.
- *
- * The phase already says where the work is, and says it while the work is
- * still there. Exported for its test, because the bug it fixes was a condition
- * that could never be true — which is invisible in a component and obvious in
- * an assertion.
- */
+/** Animate only the edge receiving the current server phase. */
 export function edgeCargo(phase: PipelinePhase, stopped: boolean): EdgeCargo {
   // Motion after a failure would claim progress that is not happening.
   if (stopped) return {};
 
   return {
-    toParser: phase === "parsing" ? FROM_STORE : undefined,
-    // The pipeline holds "handoff" for the whole of the planner's turn.
-    // "planning" is accepted too, so a later split of the two cannot silently
-    // stop this branch the way the old rule did.
+    toParser: phase === "parsing" ? ["file"] : undefined,
+    toQuestionnaire: phase === "context" ? ["bits"] : undefined,
     toPlanner:
       phase === "handoff" || phase === "planning" ? FROM_PARSER : undefined,
-    toSpecialists: phase === "specialists" ? FROM_PLANNER : undefined,
+    toDownstream: phase === "specialists" ? FROM_PLANNER : undefined,
   };
 }
 
@@ -207,13 +164,7 @@ function Trunk({
   );
 }
 
-/**
- * The planner's fan-out to the three specialists.
- *
- * Drawn only from `sm` up, where the specialists sit in three columns. Stacked
- * on a narrow screen they read as a sequence, which would be a lie about how
- * they run, so the concurrency is stated in words there instead.
- */
+/** The planner hands its plan to three downstream agents in parallel. */
 function Fanout({
   flowing,
   carrying,
@@ -226,13 +177,10 @@ function Fanout({
 
   return (
     <div aria-hidden="true" className="hidden sm:block">
-      {/* Trunk down from the planner to the crossbar. */}
       <div className="relative flex h-8 justify-center overflow-hidden">
         <span className={cn("w-px transition-colors duration-500", line)} />
         <Cargo kinds={carrying} />
       </div>
-
-      {/* Crossbar spanning the three column centres, with a drop into each. */}
       <div className="grid grid-cols-3">
         {[0, 1, 2].map((column) => (
           <div key={column} className="relative h-14 overflow-hidden">
@@ -245,15 +193,8 @@ function Fanout({
                 column === 2 && "left-0 right-1/2",
               )}
             />
-            <span
-              className={cn(
-                "absolute left-1/2 top-0 h-full w-px transition-colors duration-500",
-                line,
-              )}
-            />
-            {/* Staggered, so the three read as one load copied down each
-                branch rather than three sprites marching in lockstep. */}
-            <Cargo kinds={carrying} delayMs={column * 260} />
+            <span className={cn("absolute left-1/2 top-0 h-full w-px transition-colors duration-500", line)} />
+            <Cargo kinds={column === 2 ? undefined : carrying} delayMs={column * 260} />
           </div>
         ))}
       </div>
@@ -293,37 +234,51 @@ export function AnalysisStage({
   profile,
   error,
   onRetry,
+  onStartOver,
   phase,
   storageSteps,
   storedResume,
+  preparingContext = false,
 }: {
   agentSteps: Record<AgentId, AgentStep[]>;
   agentState: Record<AgentId, AgentCardState>;
   profile: ResumeProfile | null;
   error: string | null;
   onRetry: () => void;
+  onStartOver?: () => void;
   /** Where the run currently is; drives the retro loading screen. */
   phase: PipelinePhase;
   storageSteps: AgentStep[];
   storedResume: StoredResume | null;
+  /** Reuse the pipeline UI before questionnaire submission, with downstream work queued. */
+  preparingContext?: boolean;
 }) {
-  const storageState = traceState(storageSteps);
+  const extractionSteps = agentSteps.parser.filter(step => step.key !== "embed");
+  const embeddingSteps = agentSteps.parser.filter(step => step.key === "embed");
+  const embeddingState = traceState(embeddingSteps);
+  const downstreamQueued = embeddingState !== "done";
+  const parserSteps = preparingContext ? extractionSteps : agentSteps.parser;
+  const parserState = preparingContext ? traceState(extractionSteps) : agentState.parser;
 
   const carrying = edgeCargo(phase, Boolean(error));
 
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
-      <SectionLabel>Step 2</SectionLabel>
+      <SectionLabel>{preparingContext ? "Step 2 · Context" : "Step 3"}</SectionLabel>
       <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-        Your resume, moving down the line
+        {preparingContext ? "Preparing your questionnaire" : "Your resume, moving down the line"}
       </h1>
+      {preparingContext ? <p className="mt-3 text-sm leading-relaxed text-ink-2">The Questionnaire Agent is reviewing your résumé now. Your optional questions are coming next.</p> : null}
       {/* The pipeline as a loading screen: three clerks passing one document. */}
       {!error ? (
         <RetroOfficeLoader
           phase={phase}
+          preparingContext={preparingContext}
           storageSteps={storageSteps}
           parserSteps={agentSteps.parser}
           plannerSteps={agentSteps.planner}
+          contextSteps={agentSteps.context}
+          downstreamSteps={[...agentSteps.improver, ...agentSteps.advisor]}
           className="mt-6"
         />
       ) : null}
@@ -338,66 +293,61 @@ export function AnalysisStage({
           <Button variant="secondary" size="sm" className="mt-3" onClick={onRetry}>
             Try again
           </Button>
+          {onStartOver ? <Button variant="ghost" size="sm" className="ml-2 mt-3" onClick={onStartOver}>Choose another résumé</Button> : null}
         </div>
       ) : null}
 
       {/* --- The tree -------------------------------------------------- */}
 
       <div className="mt-6">
-        <AgentTrace
-          name="Resume Store"
-          role="S3 object + DynamoDB record"
-          icon={<DocumentIcon className="h-4.5 w-4.5" />}
-          steps={storageSteps}
-          state={storageState}
-        />
-
-        <Trunk
-          flowing={storageState === "done"}
-          carrying={carrying.toParser}
-          className="h-14"
-        />
-
-        <AgentNode
-          agent="parser"
-          steps={agentSteps.parser}
-          state={agentState.parser}
-        />
-
-        <Trunk
-          flowing={agentState.parser === "done"}
-          carrying={carrying.toPlanner}
-          className="h-14"
-        />
-
+        {preparingContext ? (
+          <>
+            <AgentTrace
+              name="Resume Store"
+              role="S3 object + DynamoDB record"
+              icon={<DocumentIcon className="h-4.5 w-4.5" />}
+              steps={storageSteps}
+              state={traceState(storageSteps)}
+            />
+            <Trunk flowing={traceState(storageSteps) === "done"} carrying={carrying.toParser} className="h-14" />
+            <AgentNode agent="parser" steps={parserSteps} state={parserState} />
+            <Trunk flowing={parserState === "done"} carrying={carrying.toQuestionnaire} className="h-12" />
+            <AgentNode agent="context" steps={agentSteps.context} state={agentState.context} />
+            <Trunk flowing={false} className="h-12" />
+          </>
+        ) : null}
         <AgentNode
           agent="planner"
-          steps={agentSteps.planner}
-          state={agentState.planner}
+          steps={downstreamQueued ? [] : agentSteps.planner}
+          state={downstreamQueued ? "idle" : agentState.planner}
+          className={downstreamQueued ? "grayscale" : undefined}
         />
 
-        <Fanout
-          flowing={agentState.planner === "done"}
-          carrying={carrying.toSpecialists}
-        />
-
-        {/* Stacked on mobile, so the fan-out cannot be drawn — say it. */}
-        <p className="mt-5 text-center text-[12px] text-ink-muted sm:hidden">
-          The three agents below run at the same time.
-        </p>
-
-        <div className="mt-4 grid gap-4 sm:mt-0 sm:grid-cols-3">
-          {SPECIALISTS.map((agent) => (
-            <AgentNode
-              key={agent}
-              agent={agent}
-              steps={agentSteps[agent]}
-              state={agentState[agent]}
+        {!preparingContext ? (
+          <>
+            <Fanout
+              flowing={agentState.planner === "done"}
+              carrying={carrying.toDownstream}
             />
-          ))}
-        </div>
+            <p className="mt-5 text-center text-[12px] text-ink-muted sm:hidden">
+              The improver and advisor run together. Career alternatives follow on the results screen.
+            </p>
+            <div className="mt-4 grid gap-4 sm:mt-0 sm:grid-cols-3">
+              {SPECIALISTS.map(agent => (
+                <AgentNode
+                  key={agent}
+                  agent={agent}
+                  steps={downstreamQueued ? [] : agentSteps[agent]}
+                  state={downstreamQueued ? "idle" : agentState[agent]}
+                  className={downstreamQueued ? "grayscale" : undefined}
+                />
+              ))}
+            </div>
+          </>
+        ) : null}
       </div>
 
+      {storedResume ? <StoredReceipt resume={storedResume} /> : null}
       {profile ? <HandoffPanel profile={profile} /> : null}
     </div>
   );
@@ -405,7 +355,7 @@ export function AnalysisStage({
 
 /** Derive a card state from a step list, matching the agent cards' rule. */
 function traceState(steps: AgentStep[]): AgentCardState {
-  if (steps.length === 0) return "idle";
+  if (steps.length === 0 || steps.every(s => s.status === "pending")) return "idle";
   if (steps.every((s) => s.status === "done")) return "done";
   return "running";
 }

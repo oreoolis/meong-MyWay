@@ -1,6 +1,8 @@
 "use client";
 
+import type { ProgressReporter } from "./progress";
 import { fetchAuthSession } from "aws-amplify/auth";
+import type { IntakeResponse, QuestionnaireSubmission } from "@/lib/resume/questionnaire-types";
 
 import type {
   AnalysisBundle,
@@ -13,8 +15,8 @@ import type {
  * Browser-side access to `/api/analysis`.
  *
  * Same header convention as `lib/resume/client.ts` — Cognito tokens travel per
- * call, and the client never asserts a user ID. There is no request body: the
- * server analyses whichever resume the caller has on file.
+ * call, and the client never asserts a user ID. Intake accepts a resume ID;
+ * completion sends only the persisted questionnaire's selected IDs.
  */
 
 export class AnalysisRequestError extends Error {
@@ -119,17 +121,18 @@ export async function fetchAnalysis(
  * separately by `requestCareerSwap` once the results screen is up, because it
  * is the slowest agent and only one of the two branches needs it.
  */
-export async function runAnalysis(signal?: AbortSignal): Promise<AnalysisBundle> {
+export async function runAnalysis(signal?: AbortSignal, submission?: QuestionnaireSubmission, onProgress?: ProgressReporter): Promise<AnalysisBundle> {
   const response = await fetch("/api/analysis", {
     method: "POST",
     cache: "no-store",
-    headers: await authHeaders(),
+    headers: { ...await authHeaders(), "Content-Type": "application/json", ...(onProgress ? { Accept: "application/x-ndjson" } : {}) },
+    body: JSON.stringify(submission),
     signal,
   });
 
   if (!response.ok) throw await failure(response);
 
-  const body = (await response.json()) as { analysis: AnalysisBundle };
+  const body = await readProgressResponse<{ analysis: AnalysisBundle }>(response, onProgress, signal);
   return body.analysis;
 }
 
@@ -153,6 +156,16 @@ export function toAnalysisBundle(stored: StoredAnalysis): AnalysisBundle | null 
     swap: stored.swapper ?? null,
     cost: { inputTokens: 0, outputTokens: 0, embeddingTokens: 0, estimatedUsd: 0 },
   };
+}
+
+export async function requestResumeIntake(resumeId: string, signal?: AbortSignal, onProgress?: ProgressReporter): Promise<IntakeResponse> {
+  const response = await fetch("/api/analysis/intake", {
+    method: "POST", cache: "no-store", signal,
+    headers: { ...await authHeaders(), "Content-Type": "application/json", ...(onProgress ? { Accept: "application/x-ndjson" } : {}) },
+    body: JSON.stringify({ resumeId }),
+  });
+  if (!response.ok) throw await failure(response);
+  return readProgressResponse<IntakeResponse>(response, onProgress, signal);
 }
 
 /** What the swapper produced, plus what that one agent cost on its own. */
@@ -181,4 +194,37 @@ export async function requestCareerSwap(
   if (!response.ok) throw await failure(response);
 
   return (await response.json()) as CareerSwapResult;
+}
+
+/** Decode complete lines across arbitrary network and UTF-8 chunk boundaries. */
+export async function readProgressResponse<T>(response: Response, onProgress?: ProgressReporter, signal?: AbortSignal): Promise<T> {
+  if (!response.headers.get("content-type")?.includes("application/x-ndjson")) return response.json() as Promise<T>;
+  if (!response.body) throw new AnalysisRequestError("The progress stream ended early. Try again.", 502, true);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      const { value, done } = await reader.read();
+      signal?.throwIfAborted();
+      pending += decoder.decode(value, { stream: !done });
+      let boundary: number;
+      while ((boundary = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 1);
+        if (!line.trim()) continue;
+        const frame = JSON.parse(line);
+        if (frame.type === "phase" && ["parsing", "context", "embedding", "planning", "specialists", "complete"].includes(frame.phase)) onProgress?.(frame.phase);
+        if (frame.type === "result") {
+          if (frame.status >= 400) throw await failure(new Response(JSON.stringify(frame.body), { status: frame.status }));
+          return frame.body as T;
+        }
+      }
+      if (done) throw new AnalysisRequestError("The progress stream ended early. Try again.", 502, true);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }

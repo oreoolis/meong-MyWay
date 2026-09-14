@@ -7,20 +7,20 @@ const VALUE_PROPS = [
   {
     icon: <SparkIcon className="h-5 w-5" />,
     label: "Understand",
-    title: "Your resume, actually read",
-    body: "The parser agent pulls out your skills, seniority, and domain, not just keywords.",
+    title: "Your experience, with context",
+    body: "The parser extracts your profile, then the questionnaire agent asks only for useful missing evidence.",
   },
   {
     icon: <RouteIcon className="h-5 w-5" />,
     label: "Map",
     title: "Paths, not job listings",
-    body: "The planner agent maps where you are against where you could realistically go.",
+    body: "The career planner combines your résumé and answers to map progression, adjacent moves, and pivots.",
   },
   {
     icon: <LockIcon className="h-5 w-5" />,
-    label: "Control",
-    title: "You stay in control",
-    body: "Your resume and its embeddings are stored against your account, and only yours.",
+    label: "Act",
+    title: "Advice from three specialists",
+    body: "Get résumé improvements, industry role matches, and a separate route into transferable careers.",
   },
 ];
 
@@ -41,11 +41,11 @@ export function LandingStage({ onGetStarted }: { onGetStarted: () => void }) {
               How it works
             </p>
             <h2 className="mt-5 max-w-lg text-[2.5rem] font-semibold leading-[1.02] tracking-[-0.045em] text-slate-950 sm:text-[3.25rem]">
-              One resume. Two agents. A realistic next step.
+              One résumé. Six agents. A connected career plan.
             </h2>
             <p className="mt-6 max-w-md text-[15px] leading-7 text-slate-500">
-              Upload your CV once. Two agents work in sequence — one to understand
-              what you have done, one to map where it can take you.
+              Upload your CV once. MyWay builds your profile, asks for useful context,
+              maps realistic paths, and sends the plan to three specialist agents.
             </p>
             <button
               type="button"

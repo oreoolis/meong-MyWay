@@ -34,7 +34,7 @@ type ResponsiveHeroBannerProps = {
 
 /**
  * Landing hero. The animated process map is intentionally the only prominent
- * motion: it shows the actual handoff from resume to agents to career routes.
+ * motion: it shows the actual handoff from stored resume to the agent network.
  */
 export function ResponsiveHeroBanner({
   backgroundImageUrl = "/hero-architecture.jpg",
@@ -199,80 +199,95 @@ export function ResponsiveHeroBanner({
                   <FileText className="h-4 w-4" />
                 </span>
                 <div>
-                  <p className="text-sm font-medium text-white">From resume to next move</p>
+                  <p className="text-sm font-medium text-white">From résumé to career plan</p>
                 </div>
               </div>
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200 ring-1 ring-emerald-300/15">
                 <Sparkles className="h-3 w-3" />
-                2 agents
+                6 agents
               </span>
             </div>
 
-            <div className="relative px-6 py-6">
-              <div className="mw-flow-node mw-flow-node-1 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[.055] p-3.5">
+              <div className="relative px-6 py-5">
+                <div className="mw-flow-node mw-flow-node-1 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[.055] p-3.5">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 text-blue-100">
                   <FileText className="h-4 w-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-white/35">
-                    Start
+                    Stored securely
                   </p>
-                  <p className="mt-0.5 text-sm font-medium text-white">Resume</p>
+                  <p className="mt-0.5 text-sm font-medium text-white">Résumé store</p>
                 </div>
                 <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] text-white/45 ring-1 ring-white/10">
-                  PDF or DOCX
+                  S3 + DynamoDB
                 </span>
               </div>
 
-              <div className="mw-flow-connector mw-flow-connector-1 relative ml-[31px] h-5 w-px bg-white/15" />
+              <div className="mw-flow-connector mw-flow-connector-1 relative ml-[31px] h-3 w-px bg-white/15" />
 
-              <div className="mw-flow-node mw-flow-node-2 flex items-center gap-3 rounded-2xl border border-blue-300/15 bg-blue-400/[.07] p-3.5">
+              <div className="mw-flow-node mw-flow-node-2 flex items-center gap-3 rounded-2xl border border-blue-300/15 bg-blue-400/[.07] p-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-400/15 font-mono text-[11px] font-semibold text-blue-200 ring-1 ring-blue-300/15">
                   01
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-white">Parser agent</p>
+                  <p className="text-sm font-medium text-white">Resume Parser</p>
                   <p className="mt-0.5 truncate text-[11px] text-white/45">
-                    Understands your experience
+                    Extracts skills and experience into a profile
                   </p>
                 </div>
                 <ArrowDown className="h-4 w-4 text-blue-300/60" />
               </div>
 
-              <div className="mw-flow-connector mw-flow-connector-2 relative ml-[31px] h-5 w-px bg-white/15" />
+              <div className="mw-flow-connector mw-flow-connector-2 relative ml-[31px] h-3 w-px bg-white/15" />
 
-              <div className="mw-flow-node mw-flow-node-3 flex items-center gap-3 rounded-2xl border border-blue-300/15 bg-blue-400/[.07] p-3.5">
+              <div className="mw-flow-node mw-flow-node-3 flex items-center gap-3 rounded-2xl border border-amber-300/15 bg-amber-400/[.07] p-3">
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-400/15 font-mono text-[11px] font-semibold text-blue-200 ring-1 ring-blue-300/15">
                   02
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-white">Planner agent</p>
+                  <p className="text-sm font-medium text-white">Questionnaire Agent</p>
                   <p className="mt-0.5 truncate text-[11px] text-white/45">
-                    Finds realistic next moves
+                    Fills evidence gaps before the final embedding
+                  </p>
+                </div>
+                <Sparkles className="h-4 w-4 text-amber-300/70" />
+              </div>
+
+              <div className="mw-flow-connector mw-flow-connector-3 relative ml-[31px] h-3 w-px bg-white/15" />
+
+              <div className="mw-flow-node mw-flow-node-4 flex items-center gap-3 rounded-2xl border border-blue-300/15 bg-blue-400/[.07] p-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-400/15 font-mono text-[11px] font-semibold text-blue-200 ring-1 ring-blue-300/15">
+                  03
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-white">Career Planner</p>
+                  <p className="mt-0.5 truncate text-[11px] text-white/45">
+                    Maps progression, adjacent and pivot paths
                   </p>
                 </div>
                 <GitBranch className="h-4 w-4 text-blue-300/60" />
               </div>
 
-              <div className="mw-flow-connector mw-flow-connector-3 relative ml-[31px] h-5 w-px bg-white/15" />
+              <div className="relative ml-[31px] h-3 w-px bg-white/15" />
 
               <div className="mw-flow-node mw-flow-node-4">
                 <div className="mb-2.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[.16em] text-white/35">
                   <GitBranch className="h-3.5 w-3.5 text-blue-300" />
-                  Career routes
+                  Downstream agents
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="rounded-xl border border-blue-300/15 bg-blue-400/[.08] px-3 py-2.5">
                     <span className="mb-2 block h-1.5 w-1.5 rounded-full bg-blue-400" />
-                    <p className="text-[11px] font-medium text-white/85">Progression</p>
+                    <p className="text-[10px] font-medium leading-tight text-white/85">04 · Resume Improver</p>
                   </div>
                   <div className="rounded-xl border border-orange-300/15 bg-orange-400/[.07] px-3 py-2.5">
                     <span className="mb-2 block h-1.5 w-1.5 rounded-full bg-orange-400" />
-                    <p className="text-[11px] font-medium text-white/85">Adjacent</p>
+                    <p className="text-[10px] font-medium leading-tight text-white/85">05 · Industry Advisor</p>
                   </div>
                   <div className="rounded-xl border border-emerald-300/15 bg-emerald-400/[.07] px-3 py-2.5">
                     <span className="mb-2 block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    <p className="text-[11px] font-medium text-white/85">Pivot</p>
+                    <p className="text-[10px] font-medium leading-tight text-white/85">06 · Career Swapper</p>
                   </div>
                 </div>
               </div>

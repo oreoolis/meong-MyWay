@@ -65,6 +65,8 @@ export type EmbeddingMeta = {
 };
 
 export type ResumeProfile = {
+  /** Validated self-reported question/answer pairs, kept separate from document-derived fields. */
+  questionnaireEvidence?: import("./resume/questionnaire-types").QuestionnaireEvidence[];
   candidateName: string;
   headline: string;
   location: string;
@@ -380,6 +382,7 @@ export type SwapRequestState = "idle" | "loading" | "done" | "failed";
  * whatever survived, not a guaranteed whole.
  */
 export type StoredAnalysis = {
+  intake?: import("./resume/questionnaire-types").PendingResumeIntake;
   profile?: ResumeProfile;
   embedding?: StoredEmbedding;
   plan?: CareerPlan;
@@ -405,6 +408,7 @@ export type AgentStep = {
 
 export type AgentId =
   | "parser"
+  | "context"
   | "planner"
   | "improver"
   | "advisor"

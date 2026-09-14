@@ -215,7 +215,7 @@ export function PixelCargo({
  * Stations
  * ---------------------------------------------------------------------- */
 
-type StationId = "store" | "parser" | "planner" | "specialists";
+type StationId = "store" | "parser" | "questionnaire" | "planner" | "improver" | "advisor" | "swapper";
 
 type Station = {
   id: StationId;
@@ -224,42 +224,57 @@ type Station = {
   shirt: string;
 };
 
-// The fourth desk stands for all three specialists (improver, advisor, and
-// swapper), which run together, so one desk represents the fan-out rather
-// than pretending they are sequential.
-const STATIONS: Station[] = [
+const CONTEXT_STATIONS: Station[] = [
   { id: "store", name: "FILING", deskLabel: "S3 + DYNAMO", shirt: STATION_COLOUR.store },
-  { id: "parser", name: "PARSER", deskLabel: "READ + EMBED", shirt: STATION_COLOUR.parser },
-  { id: "planner", name: "PLANNER", deskLabel: "MATCH PATHS", shirt: STATION_COLOUR.planner },
-  {
-    id: "specialists",
-    name: "ADVISORS",
-    deskLabel: "SKILLS FRAMEWORK",
-    shirt: STATION_COLOUR.specialists,
-  },
+  { id: "parser", name: "RESUME PARSER", deskLabel: "PROFILE + EMBEDDING", shirt: STATION_COLOUR.parser },
+  { id: "questionnaire", name: "QUESTIONNAIRE AGENT", deskLabel: "SELECT + REVIEW", shirt: "#f2b134" },
+  { id: "planner", name: "CAREER PLANNER", deskLabel: "MATCH PATHS", shirt: STATION_COLOUR.planner },
+];
+
+const ANALYSIS_STATIONS: Station[] = [
+  { id: "planner", name: "CAREER PLANNER", deskLabel: "MATCH PATHS", shirt: STATION_COLOUR.planner },
+  { id: "improver", name: "RESUME IMPROVER", deskLabel: "REWRITE LINES", shirt: "#f2b134" },
+  { id: "advisor", name: "INDUSTRY ADVISOR", deskLabel: "SCORE ROLES", shirt: STATION_COLOUR.specialists },
+  { id: "swapper", name: "CAREER SWAPPER", deskLabel: "RESULTS STAGE", shirt: "#e8dcff" },
 ];
 
 /** Which desk is holding the work, and whether it is mid-flight to the next. */
-const PHASE_POSITION: Record<
-  PipelinePhase,
-  { station: number; inTransit: boolean; progress: number }
-> = {
+const CONTEXT_PHASE_POSITION: Record<PipelinePhase, { station: number; inTransit: boolean; progress: number }> = {
   uploading: { station: 0, inTransit: false, progress: 10 },
-  stored: { station: 0, inTransit: true, progress: 24 },
-  parsing: { station: 1, inTransit: false, progress: 38 },
-  handoff: { station: 1, inTransit: true, progress: 52 },
-  planning: { station: 2, inTransit: false, progress: 68 },
-  specialists: { station: 3, inTransit: false, progress: 88 },
+  stored: { station: 0, inTransit: true, progress: 18 },
+  parsing: { station: 1, inTransit: false, progress: 28 },
+  context: { station: 2, inTransit: false, progress: 45 },
+  answering: { station: 2, inTransit: false, progress: 50 },
+  embedding: { station: 2, inTransit: true, progress: 60 },
+  handoff: { station: 2, inTransit: true, progress: 68 },
+  planning: { station: 3, inTransit: false, progress: 76 },
+  specialists: { station: 3, inTransit: false, progress: 90 },
   complete: { station: 3, inTransit: false, progress: 100 },
 };
 
+const ANALYSIS_PHASE_POSITION: Record<PipelinePhase, { station: number; inTransit: boolean; progress: number }> = {
+  uploading: { station: 0, inTransit: false, progress: 10 },
+  stored: { station: 0, inTransit: false, progress: 18 },
+  parsing: { station: 0, inTransit: false, progress: 28 },
+  context: { station: 0, inTransit: false, progress: 45 },
+  answering: { station: 0, inTransit: false, progress: 50 },
+  embedding: { station: 0, inTransit: false, progress: 60 },
+  handoff: { station: 0, inTransit: false, progress: 68 },
+  planning: { station: 0, inTransit: false, progress: 76 },
+  specialists: { station: 1.5, inTransit: false, progress: 90 },
+  complete: { station: 1.5, inTransit: false, progress: 100 },
+};
+
 const PHASE_CAPTION: Record<PipelinePhase, string> = {
-  uploading: "Filing clerk is stashing your resume...",
-  stored: "Stored! Passing the file to the parser...",
-  parsing: "Parser is reading and embedding the document...",
-  handoff: "Embeddings and metadata handed to the planner...",
+  uploading: "Uploading your résumé securely...",
+  stored: "Stored! Resume Parser is ready...",
+  parsing: "Resume Parser is extracting your profile...",
+  context: "Questionnaire Agent is preparing your questions...",
+  answering: "Your questionnaire is ready...",
+  embedding: "Finalizing your profile before Career Planner starts...",
+  handoff: "Profile and evidence handed to Career Planner...",
   planning: "Planner is matching you against career paths...",
-  specialists: "Advisors are checking the Skills Framework...",
+  specialists: "Career analysis is being completed...",
   complete: "All done! Results are ready.",
 };
 
@@ -272,28 +287,45 @@ export function RetroOfficeLoader({
   storageSteps,
   parserSteps,
   plannerSteps,
+  contextSteps,
+  downstreamSteps,
   className,
+  preparingContext = false,
 }: {
   phase: PipelinePhase;
   storageSteps: AgentStep[];
   parserSteps: AgentStep[];
   plannerSteps: AgentStep[];
+  contextSteps: AgentStep[];
+  downstreamSteps: AgentStep[];
   className?: string;
+  preparingContext?: boolean;
 }) {
-  const { station, inTransit, progress } = PHASE_POSITION[phase];
+  const stations = preparingContext ? CONTEXT_STATIONS : ANALYSIS_STATIONS;
+  const { station, inTransit, progress } = (preparingContext ? CONTEXT_PHASE_POSITION : ANALYSIS_PHASE_POSITION)[phase];
+  const caption = PHASE_CAPTION[phase];
 
   // The line under the scene: whatever the active desk is doing right now.
-  const activeSteps =
-    station === 0 ? storageSteps : station === 1 ? parserSteps : plannerSteps;
+  const activeSteps = phase === "uploading" || phase === "stored"
+    ? storageSteps
+    : phase === "embedding"
+      ? parserSteps.filter(step => step.key === "embed")
+    : preparingContext && station === 1
+      ? parserSteps
+      : preparingContext && station === 2
+        ? contextSteps
+        : phase === "specialists"
+          ? downstreamSteps
+          : plannerSteps;
   const runningStep =
     activeSteps.find((s) => s.status === "running") ??
     [...activeSteps].reverse().find((s) => s.status === "done");
 
   // Desks sit at 1/6, 3/6, 5/6 across; in transit the document rides halfway
   // to the next desk.
-  const deskCentre = (index: number) => ((index * 2 + 1) / 6) * 100;
+  const deskCentre = (index: number) => ((index * 2 + 1) / (stations.length * 2)) * 100;
   const documentLeft = inTransit
-    ? (deskCentre(station) + deskCentre(Math.min(station + 1, 2))) / 2
+    ? (deskCentre(station) + deskCentre(Math.min(station + 1, stations.length - 1))) / 2
     : deskCentre(station);
 
   return (
@@ -306,7 +338,7 @@ export function RetroOfficeLoader({
     >
       {/* Screen-reader users get the state as text, not as a picture. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {PHASE_CAPTION[phase]} {progress}% complete.
+        {caption} {progress}% complete.
       </p>
 
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -314,16 +346,17 @@ export function RetroOfficeLoader({
           MyWay Agency
         </p>
         <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#7c6a99]">
-          Stage {Math.min(station + 1, 3)} of 3
+          {preparingContext ? `Stage ${Math.floor(station) + 1} of ${stations.length}` : "Career analysis"}
         </p>
       </header>
 
       {/* --- The office floor -------------------------------------------- */}
-      <div className="relative mt-4 h-[128px]">
+      <div className="mt-4">
+      <div className="relative h-[128px]">
         {/* The route the work travels, behind the sprites. */}
         <div
           aria-hidden="true"
-          className="absolute left-[16.6%] right-[16.6%] top-[26px] border-t-2 border-dashed border-[#2b1f3d]"
+          className="absolute left-[12.5%] right-[12.5%] top-[26px] border-t-2 border-dashed border-[#2b1f3d]"
         />
 
         {/* The document itself, held above whichever desk has the work. */}
@@ -337,23 +370,34 @@ export function RetroOfficeLoader({
         </div>
 
         <div className="absolute inset-x-0 bottom-0 grid grid-cols-4 items-end gap-2">
-          {STATIONS.map((s, index) => (
+          {stations.map((s, index) => {
+            const downstreamActive = !preparingContext && phase === "specialists" && (s.id === "improver" || s.id === "advisor");
+            const active = preparingContext ? index === station : phase === "planning" ? s.id === "planner" : downstreamActive;
+            const finished = preparingContext
+              ? index < station || phase === "complete"
+              : s.id === "planner" && (phase === "specialists" || phase === "complete");
+            const muted = preparingContext
+              ? s.id === "planner" || index > station
+              : s.id === "swapper" || (!active && !finished);
+            return (
             <Desk
               key={s.id}
               station={s}
-              active={index === station}
-              finished={index < station || phase === "complete"}
+              active={active}
+              finished={finished}
+              muted={muted}
             />
-          ))}
+          )})}
         </div>
 
         {/* Floor line. */}
         <div className="absolute inset-x-0 bottom-0 h-0.5 bg-[#2b1f3d]" />
       </div>
 
+      </div>
       {/* --- Caption ------------------------------------------------------ */}
       <p className="mt-5 font-mono text-[12px] leading-relaxed text-[#e8dcff]">
-        {PHASE_CAPTION[phase]}
+        {caption}
       </p>
       {runningStep ? (
         <p className="mt-1 truncate font-mono text-[11px] text-[#7c6a99]">
@@ -405,16 +449,19 @@ function Desk({
   station,
   active,
   finished,
+  muted = false,
 }: {
   station: Station;
   active: boolean;
   finished: boolean;
+  muted?: boolean;
 }) {
   return (
     <div
       className={cn(
         "flex flex-col items-center transition-opacity duration-500",
         active ? "opacity-100" : finished ? "opacity-70" : "opacity-40",
+        muted && "grayscale",
       )}
     >
       <PixelGrid
