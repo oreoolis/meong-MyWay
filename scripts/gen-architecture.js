@@ -43,6 +43,44 @@ function symbolFor(id, file) {
   return `<symbol id="ic-${id}" viewBox="0 0 64 64">${inner}</symbol>`;
 }
 
+/**
+ * Stand-in tiles for services whose official icon is not vendored yet.
+ *
+ * Lambda, EventBridge and CloudWatch arrived with the job listings feed and
+ * `docs/img/aws/` has no SVG for them. These are deliberately plain — a tile in
+ * the service's own category colour with a simple white glyph — so they read as
+ * substitutes rather than passing themselves off as the official artwork.
+ * Drop the real SVGs into `docs/img/aws/`, move the id into `ICONS`, and delete
+ * the entry here.
+ */
+const SUBSTITUTE_ICONS = {
+  // Compute.
+  lambda: {
+    fill: "#ED7100",
+    glyph: `<path d="M 19 47 L 32 19 L 45 47" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  // Application Integration.
+  eventbridge: {
+    fill: "#E7157B",
+    glyph:
+      `<circle cx="32" cy="32" r="14" fill="none" stroke="#fff" stroke-width="4"/>` +
+      `<path d="M 32 23 V 32 L 39 37" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+  // Management & Governance.
+  cloudwatch: {
+    fill: "#E7157B",
+    glyph: `<path d="M 18 44 L 27 32 L 35 38 L 46 21" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+  },
+};
+
+function substituteSymbol(id, { fill, glyph }) {
+  return (
+    `<symbol id="ic-${id}" viewBox="0 0 64 64">` +
+    `<rect x="2" y="2" width="60" height="60" rx="10" fill="${fill}"/>${glyph}` +
+    `</symbol>`
+  );
+}
+
 /* --------------------------------------------------------------------------
  * Theme
  * ------------------------------------------------------------------------ */
@@ -142,7 +180,7 @@ function chip(x, y, w, label, t, o = {}) {
 
 function build(t) {
   const W = 1320;
-  const H = 930;
+  const H = 1190;
   const o = [];
 
   o.push(`<rect width="${W}" height="${H}" fill="${t.bg}"/>`);
@@ -172,10 +210,11 @@ function build(t) {
   o.push(text(nx + 18, ny + 28, "COMPUTE — NEXT.JS 16 APP ROUTER", { t, size: 10.5, weight: 700, fill: "muted" }));
   o.push(text(nx + 18, ny + 52, "Pages and API routes, one deployment", { t, size: 12.5, weight: 600 }));
 
-  const chipY = [ny + 74, ny + 108, ny + 142];
+  const chipY = [ny + 74, ny + 102, ny + 130, ny + 158];
   o.push(chip(nx + 18, chipY[0], nw - 36, "/api/auth/session · verifies Cognito JWTs", t));
   o.push(chip(nx + 18, chipY[1], nw - 36, "/api/resume · GET POST DELETE", t));
   o.push(chip(nx + 18, chipY[2], nw - 36, "/api/analysis · GET POST", t));
+  o.push(chip(nx + 18, chipY[3], nw - 36, "/api/jobs · GET · no auth, shared data", t));
 
   const ox = nx + 18, oy = ny + 190, ow = nw - 36, oh = 412;
   o.push(panel(ox, oy, ow, oh, { t, fill: "panelAlt", stroke: "borderStrong" }));
@@ -207,7 +246,7 @@ function build(t) {
   o.push(text(ox + 14, oy + oh - 14, "Agents 3–5 fan out concurrently — Promise.allSettled", { t, size: 10.5, fill: "muted" }));
 
   /* ------------------------------------------------------------ AWS CLOUD */
-  const ax = 810, ay0 = 100, aw = 470, ah = 626;
+  const ax = 810, ay0 = 100, aw = 470, ah = 682;
   o.push(panel(ax, ay0, aw, ah, { t, fill: "panelAlt", stroke: "borderStrong", dash: "6 4" }));
   o.push(text(ax + 18, ay0 + 28, "AWS CLOUD", { t, size: 10.5, weight: 700, fill: "awsInk" }));
   o.push(text(ax + aw - 18, ay0 + 28, "Region us-east-1", { t, size: 10.5, fill: "muted", anchor: "end", font: MONO }));
@@ -223,14 +262,15 @@ function build(t) {
 
   // Storage
   const sx = ax + 18, sy = 340;
-  o.push(panel(sx, sy, aw - 36, 204, { t, fill: "panel" }));
+  o.push(panel(sx, sy, aw - 36, 260, { t, fill: "panel" }));
   o.push(text(sx + 16, sy + 24, "STORAGE", { t, size: 10.5, weight: 700, fill: "muted" }));
-  o.push(service(sx + 16, sy + 36, "s3", "Amazon S3", "resume bytes · ≤5 MB · byte-sniffed", t));
+  o.push(service(sx + 16, sy + 36, "s3", "Amazon S3 · uploads", "resume bytes · ≤5 MB · byte-sniffed", t));
   o.push(service(sx + 16, sy + 92, "dynamodb", "DynamoDB · resumes", "one current resume per user", t));
   o.push(service(sx + 16, sy + 148, "dynamodb", "DynamoDB · analyses", "one item per artifact · TTL 30d", t));
+  o.push(service(sx + 16, sy + 204, "s3", "Amazon S3 · jobs", "jobs/latest.json · shared, not per-user", t));
 
   // Identity
-  const iy = 560;
+  const iy = 616;
   o.push(panel(sx, iy, aw - 36, 148, { t, fill: "panel" }));
   o.push(text(sx + 16, iy + 24, "IDENTITY & ACCESS", { t, size: 10.5, weight: 700, fill: "muted" }));
   o.push(service(sx + 16, iy + 36, "cognito", "Amazon Cognito", "user pool · SRP · TOTP MFA", t));
@@ -252,20 +292,21 @@ function build(t) {
 
   // Browser -> Cognito (SRP), routed under both columns
   o.push(
-    `<path d="M ${cx + cw / 2} ${cy + ch} V 738 H 930 V ${iy + 148 + 6}" fill="none" stroke="${t.line}" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)" stroke-linejoin="round"/>`,
+    `<path d="M ${cx + cw / 2} ${cy + ch} V 798 H 930 V ${iy + 148 + 6}" fill="none" stroke="${t.line}" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)" stroke-linejoin="round"/>`,
   );
-  o.push(text(cx + cw / 2 + 12, 732, "SRP sign-in / sign-up (Amplify Auth) — password never leaves the browser", { t, size: 10.5, fill: "muted" }));
+  o.push(text(cx + cw / 2 + 12, 792, "SRP sign-in / sign-up (Amplify Auth) — password never leaves the browser", { t, size: 10.5, fill: "muted" }));
 
   /* ------------------------------------------------------------- EXTERNAL */
-  const ex = 40, ey = 756, ew = 710, eh = 78;
+  const ex = 40, ey = 816, ew = 710, eh = 96;
   o.push(panel(ex, ey, ew, eh, { t, fill: "panelAlt", dash: "5 4" }));
-  o.push(text(ex + 18, ey + 26, "External data — SSG-WSG Skills Framework API", { t, size: 13, weight: 600 }));
-  o.push(text(ex + 18, ey + 47, "Ground truth for role titles, sectors and salary bands. Agents 4 and 5 only.", { t, size: 11, fill: "muted" }));
-  o.push(text(ex + 18, ey + 65, "A role the API never returned is dropped, never invented by the model.", { t, size: 11, fill: "muted" }));
+  o.push(text(ex + 18, ey + 26, "External data — two sources, two different questions", { t, size: 13, weight: 600 }));
+  o.push(text(ex + 18, ey + 47, "SSG-WSG Skills Framework — the taxonomy. Role titles, sectors, salary bands. Agents 4 and 5.", { t, size: 11, fill: "muted" }));
+  o.push(text(ex + 18, ey + 65, "MyCareersFuture — the vacancies. Who is hiring today, and the URL to apply.", { t, size: 11, fill: "muted" }));
+  o.push(text(ex + 18, ey + 83, "A role the API never returned is dropped, never invented by the model.", { t, size: 11, fill: "muted" }));
   o.push(`<path d="M 568 ${oy + oh} V ${ey - 6}" fill="none" stroke="${t.line}" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arw)"/>`);
 
   /* ---------------------------------------------------------------- CI/CD */
-  const gx = 810, gy = 756, gw = 470, gh = 140;
+  const gx = 810, gy = 816, gw = 470, gh = 140;
   o.push(panel(gx, gy, gw, gh, { t, fill: "panel" }));
   o.push(text(gx + 18, gy + 26, "CI/CD — GitHub Actions", { t, size: 13, weight: 600 }));
   o.push(chip(gx + 18, gy + 38, gw - 36, "secret-scan.yml", t, { h: 24 }));
@@ -274,10 +315,48 @@ function build(t) {
   o.push(text(gx + 18, gy + 128, "iac/*.tf provisions S3, DynamoDB, Bedrock access and IAM", { t, size: 10.5, fill: "muted" }));
   o.push(`<path d="M ${gx + gw / 2} ${gy} V ${ay0 + ah + 6}" fill="none" stroke="${t.line}" stroke-width="1.6" marker-end="url(#arw)"/>`);
 
+  /* ---------------------------------------------------- JOB LISTINGS FEED */
+  // Its own band because it is its own pipeline: nothing here is on the
+  // request path, and it runs whether or not anyone is using the app.
+  const jx = 40, jy = 986, jw = 1240, jh = 168;
+  o.push(panel(jx, jy, jw, jh, { t, fill: "panel", stroke: "borderStrong" }));
+  o.push(text(jx + 18, jy + 28, "JOB LISTINGS FEED — scheduled, off the request path", { t, size: 13, weight: 600 }));
+  o.push(text(jx + 18, jy + 48, "Optional. Without it the app runs unchanged, minus the opening badges.", { t, size: 10.5, fill: "muted" }));
+
+  const jRow = jy + 64;
+  o.push(service(jx + 18, jRow, "eventbridge", "Amazon EventBridge", "rate(12 hours)", t));
+  o.push(service(jx + 330, jRow, "lambda", "AWS Lambda", "lambda/jobs-scraper · Node 20 · no deps", t));
+  o.push(panel(jx + 646, jRow - 6, 244, 56, { t, fill: "panelAlt", dash: "5 4" }));
+  o.push(text(jx + 662, jRow + 18, "MyCareersFuture", { t, size: 12.5, weight: 600 }));
+  o.push(text(jx + 662, jRow + 35, "public jobs API · undocumented", { t, size: 10.5, fill: "muted" }));
+  o.push(service(jx + 946, jRow, "s3", "Amazon S3 · jobs", "run archive, then flip latest.json", t));
+
+  o.push(arrow(jx + 284, jRow + 22, jx + 324, jRow + 22, t));
+  o.push(arrow(jx + 600, jRow + 22, jx + 640, jRow + 22, t));
+  o.push(arrow(jx + 896, jRow + 22, jx + 940, jRow + 22, t));
+
+  o.push(service(jx + 18, jRow + 66, "cloudwatch", "Amazon CloudWatch", "logs · alarms on two failed runs", t, { size: 36 }));
+  o.push(text(jx + 330, jRow + 82, "The scraper raises rather than publishing an empty snapshot, so a blocked or reshaped API", { t, size: 10.5, fill: "muted" }));
+  o.push(text(jx + 330, jRow + 98, "leaves the last good latest.json in place and trips the alarm instead.", { t, size: 10.5, fill: "muted" }));
+
+  // The snapshot feeds the matcher, which is not an agent and calls no model.
+  //
+  // Routed up the 60px channel between the External and CI/CD panels (x 750
+  // to 810) and into the Next.js panel from below, which is the only path
+  // across this row that crosses neither panel nor the Next.js-to-AWS elbows.
+  o.push(
+    `<path d="M ${jx + 968} ${jRow - 6} V 968 H 780 V 745 H 640 V ${ny + nh + 6}" fill="none" stroke="${t.line}" stroke-width="1.6" marker-end="url(#arw)" stroke-linejoin="round"/>`,
+  );
+  o.push(text(180, 770, "lib/jobs/matching.ts — ranked against the resume vector · no model call", { t, size: 10.5, fill: "muted" }));
+
   /* ----------------------------------------------------------------- defs */
   const M = (id) =>
     `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${t.line}"/></marker>`;
-  const defs = `<defs>${M("arw")}${Object.entries(ICONS).map(([id, f]) => symbolFor(id, f)).join("")}</defs>`;
+  const defs =
+    `<defs>${M("arw")}` +
+    Object.entries(ICONS).map(([id, f]) => symbolFor(id, f)).join("") +
+    Object.entries(SUBSTITUTE_ICONS).map(([id, spec]) => substituteSymbol(id, spec)).join("") +
+    `</defs>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="MyWay AWS architecture diagram">${defs}${o.join("")}</svg>`;
 }

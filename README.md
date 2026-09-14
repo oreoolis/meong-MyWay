@@ -91,11 +91,11 @@ Everything is one Next.js app: pages and API routes ship from the same codebase,
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg" />
-    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture: browser, Next.js compute, and the Bedrock, S3, DynamoDB, Cognito and IAM services behind it" width="100%" />
+    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture: browser, Next.js compute, the Bedrock, S3, DynamoDB, Cognito and IAM services behind it, and a scheduled Lambda job-listings feed" width="100%" />
   </picture>
 </p>
 
-<sub>Icons: <a href="https://aws.amazon.com/architecture/icons/">AWS Architecture Icons</a>. Diagram regenerated with <code>node scripts/gen-architecture.js docs/img</code>.</sub>
+<sub>Icons: <a href="https://aws.amazon.com/architecture/icons/">AWS Architecture Icons</a>, except Lambda, EventBridge and CloudWatch — those three are plain stand-in tiles in the service's category colour, since their official SVGs are not vendored under <code>docs/img/aws/</code> yet. Diagram regenerated with <code>node scripts/gen-architecture.js docs/img</code>.</sub>
 
 ### The same thing as a flow graph
 
