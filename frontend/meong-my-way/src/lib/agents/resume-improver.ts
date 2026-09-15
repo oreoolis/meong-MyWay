@@ -26,6 +26,7 @@ const SYSTEM = `You are a resume editor. You improve resumes for specific, named
 
 Rules:
 - Every "before" must be text copied verbatim from the resume. If you cannot quote it exactly, do not raise that rewrite.
+- Treat questionnaire answers as the candidate's authoritative account of their experience. If an answer says they have no direct experience with, or have never used, a skill that is listed in the resume's Skills section, you MUST flag its removal as the first rewrite and set its impact to "high". This rule applies even when the target role requires that skill.
 - Never invent achievements, metrics, employers, or dates. If a bullet would be stronger with a number the candidate has not given, say so in "reason" and leave a placeholder like [X%] in "after".
 - Be concrete. "Add measurable impact" is not useful; showing the rewritten line is.
 - Reply with a single JSON object and nothing else. No prose, no markdown fences.`;
@@ -57,6 +58,7 @@ Guidance:
 - "verdict": one sentence, direct. What is holding it back most.
 - "strengths": 2-4 things genuinely working. Not flattery.
 - "rewrites": 3-6 edits, highest impact first. "before" quoted exactly from the resume.
+- Questionnaire conflict rule: inspect every questionnaire answer for "No direct use", "Never", "Never used directly", or equivalent statements of no experience. When the named skill still appears in the resume's Skills section, the first rewrite MUST use "Skills — HIGH IMPACT ISSUE" as its section, quote the skill exactly in "before", instruct the candidate to remove it in "after", explain the contradiction in "reason", and use "high" as its impact. Do not present that skill as a strength or as a keyword to add.
 - "missingKeywords": terms the target role expects that this resume never uses.
 - "formattingNotes": 0-3 notes on structure, length, or ordering. Omit if the layout is fine.`;
 }
