@@ -34,6 +34,7 @@ import {
 } from "./stages/results-choice-stage";
 import { AdvisorStage } from "./stages/advisor-stage";
 import { TransitionerStage } from "./stages/transitioner-stage";
+import { AnalysisChat } from "./ui/analysis-chat";
 
 type Stage = "landing" | "signin" | "upload" | "intake" | "questionnaire" | "analysis" | "results";
 
@@ -85,6 +86,7 @@ export function Workspace() {
    * differently: one is "still working", the other is "this did not work".
    */
   const [swapState, setSwapState] = useState<SwapRequestState>("idle");
+  const [chatRun, setChatRun] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
   const swapAbortRef = useRef<AbortController | null>(null);
@@ -204,6 +206,7 @@ export function Workspace() {
       abortRef.current = controller;
 
       setStorageSteps([]);
+      setChatRun((value) => value + 1);
       setAgentSteps(NO_STEPS);
       setAnalysis(null);
       setStoredAnalysis(null);
@@ -490,6 +493,15 @@ export function Workspace() {
           />
         ) : null}
       </main>
+
+      {process.env.NEXT_PUBLIC_ANALYSIS_CHAT_ENABLED !== "false" &&
+      (stage === "analysis" || stage === "results") ? (
+        <AnalysisChat
+          key={`${session?.userId ?? "signed-out"}:${storedResume?.resumeId ?? "no-resume"}:${chatRun}`}
+          ready={Boolean(analysis?.profile && analysis.plan && analysis.improvement)}
+          hasTransitioner={Boolean(analysis?.swap)}
+        />
+      ) : null}
 
       <footer className="border-t border-hairline px-5 py-6 sm:px-8">
         <p className="mx-auto w-full max-w-5xl text-[12px] text-ink-muted">
