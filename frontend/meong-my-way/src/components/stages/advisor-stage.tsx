@@ -17,6 +17,7 @@ import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
 import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
 import { ArrowRightIcon } from "@/components/ui/icons";
+import { ResultsToolbar } from "@/components/ui/results-toolbar";
 import { cn, formatCompactMoney } from "@/lib/utils";
 
 /**
@@ -95,23 +96,13 @@ export function AdvisorStage({
 
   return (
     <div className={cn(styles.workspace, "mw-rise mx-auto w-full max-w-6xl")}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <SectionLabel>Career advisor</SectionLabel>
-          <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-            Furthering {profile.candidateName.split(" ")[0]}&apos;s career
-          </h1>
-        </div>
-
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            Back
-          </Button>
-          <Button variant="secondary" size="sm" onClick={onSwitchBranch}>
-            Switch industry instead
-          </Button>
-        </div>
-      </div>
+      <ResultsToolbar
+        eyebrow="Career planner"
+        title={`Furthering ${profile.candidateName.split(" ")[0]}'s career`}
+        switchLabel="Career transitioner"
+        onBack={onBack}
+        onSwitch={onSwitchBranch}
+      />
 
       <div className={styles.trajectory}>
         <div>

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { CareerTabs } from "@/components/ui/career-tabs";
 import styles from "@/components/ui/career-workspace.module.css";
+import { ResultsToolbar } from "@/components/ui/results-toolbar";
 
 import type {
   AnalysisBundle,
@@ -340,23 +341,13 @@ export function TransitionerStage({
 
   return (
     <div className={cn(styles.workspace, "mw-rise mx-auto w-full max-w-6xl")}>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <SectionLabel>Career transition</SectionLabel>
-          <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-tight text-ink">
-            Where {profile.candidateName.split(" ")[0]} could go next
-          </h1>
-        </div>
-
-        <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            Back
-          </Button>
-          <Button variant="secondary" size="sm" onClick={onSwitchBranch}>
-            Further my career instead
-          </Button>
-        </div>
-      </div>
+      <ResultsToolbar
+        eyebrow="Career transitioner"
+        title={`Where ${profile.candidateName.split(" ")[0]} could go next`}
+        switchLabel="Career planner"
+        onBack={onBack}
+        onSwitch={onSwitchBranch}
+      />
 
       {!swap || swap.destinations.length === 0 ? (
         <>

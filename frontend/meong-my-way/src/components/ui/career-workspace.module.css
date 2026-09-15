@@ -11,6 +11,25 @@
 }
 .workspace h1, .workspace h2 { font-family: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif; }
 .workspace h1 { font-size: clamp(1.8rem, 3.5vw, 2.6rem); letter-spacing: -.045em; }
+.resultsHeading h1 { margin-top: 8px; }
+.resultsToolbarActions {
+  position: sticky;
+  top: calc(var(--app-header-h) + 8px);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: fit-content;
+  margin: -40px 0 0 auto;
+  padding: 5px;
+  border: 1px solid rgba(213, 220, 231, .9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .92);
+  box-shadow: 0 12px 32px -24px rgba(23, 43, 77, .42);
+  backdrop-filter: blur(14px) saturate(140%);
+}
+.resultsToolbarActions svg { width: 15px; height: 15px; }
 .tabs { display: flex; gap: 8px; overflow-x: auto; padding: 6px 3px 12px; margin-top: 28px; border-bottom: 1px solid #e5e7eb; }
 .tabs button { display: flex; align-items: center; justify-content: center; gap: 9px; flex-shrink: 0; padding: 12px 18px; border-radius: 12px; color: var(--career-muted); font-size: 14px; font-weight: 600; cursor: pointer; transition: color 180ms ease, background-color 180ms ease, transform 180ms cubic-bezier(.2,.8,.2,1); }
 .tabs button:hover { background: var(--career-wash); }
@@ -159,6 +178,9 @@
 }
 @media (max-width: 900px) { .shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 540px) {
+  .resultsToolbarActions { display: grid; grid-template-columns: auto minmax(0, 1fr); width: 100%; margin-top: 14px; }
+  .resultsToolbarActions button { min-width: 0; }
+  .resultsToolbarActions button:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .demandPanel { grid-template-columns: minmax(0, 1fr); gap: 14px; padding-top: 20px; }
   .nextSteps { padding: 18px; }
