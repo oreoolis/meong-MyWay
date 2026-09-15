@@ -5,6 +5,7 @@ import type { ModelUsage } from "@/lib/bedrock/reason";
 import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
 import { getResume, readResumeBytes } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
+import { affirmedSkillNames, disclaimedSkillNames } from "@/lib/resume/questionnaire";
 import { hasSsgCredentials } from "@/lib/ssg/oauth";
 
 import { adviseOnIndustry } from "./industry-advisor";
@@ -103,13 +104,26 @@ export async function runAnalysis(
     writes = writes.then(() => storeArtifact({ ...input, resumeId: resume.resumeId, ...(prepared ? { leaseToken: prepared.leaseToken } : {}) }));
     return writes;
   };
-  const bytes = await readResumeBytes(resume);
-  const document = { format: resume.format, bytes };
+  // Started, not awaited. The improver is the only agent that needs the raw
+  // document, and on a run that arrives with `prepared` — every run that came
+  // through the questionnaire — it does not run for another half-minute. There
+  // is no reason for this S3 read to sit in front of the planner.
+  //
+  // The bare `catch` attaches a handler now. Without it, a read that fails
+  // while the planner is still running is an unhandled rejection rather than
+  // the improver's own problem, which is what it actually is.
+  const document = readResumeBytes(resume).then((bytes) => ({
+    format: resume.format,
+    bytes,
+  }));
+  document.catch(() => {});
 
   /* --- Agent 1: parse and embed ---------------------------------------- */
 
   if (!prepared) onProgress?.({ phase: "parsing" });
-  const parsed = prepared?.parsed ?? await parseResume(resume, bytes);
+  // The parser is the one caller that cannot proceed without the bytes, so
+  // this is where the read is paid for when there is no prepared parse.
+  const parsed = prepared?.parsed ?? await parseResume(resume, (await document).bytes);
 
   /* --- Store before the handoff, exactly as the diagram requires -------- */
 
@@ -149,44 +163,51 @@ export async function runAnalysis(
   // run — and every use below degrades to "no openings" rather than failing.
   const [planned, jobMatcher] = await Promise.all([
     planCareers(parsed.profile),
-    createJobMatcher(parsed.embedding.vector),
+    // Skills the candidate disclaimed in the questionnaire are dropped here.
+    // The parser extracts from the document; the questionnaire is the
+    // candidate correcting it. Passing the raw list would let a job's "must
+    // have Kubernetes" count as covered for someone who just answered that
+    // they have never used it.
+    // ...and the ones they disclaimed are passed too, so a posting demanding
+    // the skill they just said they have never used ranks below one that does
+    // not. Without this the questionnaire could correct the skill gap but had
+    // no say at all in which vacancies were put in front of them.
+    createJobMatcher(
+      parsed.embedding.vector,
+      affirmedSkillNames(parsed.profile),
+      disclaimedSkillNames(parsed.profile),
+    ),
   ]);
 
-  // Attached before the plan is stored, so the stored artifact and the
-  // returned bundle carry the same openings rather than diverging.
-  const plan = jobMatcher
-    ? {
-        ...planned.plan,
-        paths: withOpenings(
-          planned.plan.paths,
-          await jobMatcher.openingsFor(planned.plan.paths),
-        ),
-      }
-    : planned.plan;
+  /**
+   * Attach live vacancies to anything role-shaped, degrading to none.
+   *
+   * `matching.ts` treats a missing snapshot as "no openings, never a failure",
+   * and this keeps that true of the matching itself: openings are a garnish on
+   * the analysis, and losing them must not cost someone their plan.
+   */
+  async function attachOpenings<T extends { id: string; title: string }>(
+    items: T[],
+  ): Promise<T[]> {
+    if (!jobMatcher) return items;
 
-  await Promise.all([
-    putAnalysisArtifact({
-      userId: resume.userId,
-      artifact: "plan",
-      expiresAt,
-      payload: plan,
-    }),
-    // The swapper runs after this request has already returned, so its routing
-    // has to outlive the process that computed it.
-    putAnalysisArtifact({
-      userId: resume.userId,
-      artifact: "routing",
-      expiresAt,
-      payload: {
-        sector: planned.sector,
-        searchKeywords: planned.searchKeywords,
-        adjacentKeywords: planned.adjacentKeywords,
-      },
-    }),
-  ]);
+    try {
+      return withOpenings(items, await jobMatcher.openingsFor(items));
+    } catch (error) {
+      console.error("[agents] could not attach job openings:", error);
+      return items;
+    }
+  }
 
   /* --- Agents 3 and 4: independent, so concurrent ------------------------ */
 
+  // Started here, before the openings and the plan write below, and this
+  // ordering is the point. Neither specialist reads the openings and neither
+  // reads the stored plan — they take `planned.plan` directly — so awaiting a
+  // round of posting embeddings and two DynamoDB writes before starting them
+  // simply added that time to every run. It is also the stretch the user sees
+  // as the planner taking a long time to hand over to the workers, because the
+  // "specialists" progress event could not fire until all of it had finished.
   onProgress?.({ phase: "specialists" });
   const vector = parsed.embedding.vector;
 
@@ -200,9 +221,47 @@ export async function runAnalysis(
     );
   }
 
-  const [improverOutcome, advisorOutcome] = await Promise.allSettled([
-    improveResume(parsed.profile, planned.plan, document),
+  const specialists = Promise.allSettled([
+    (async () => improveResume(parsed.profile, planned.plan, await document))(),
     adviseOnIndustry(parsed.profile, vector, planned.sector, planned.searchKeywords),
+  ]);
+
+  // Openings and the plan write run alongside the specialists rather than in
+  // front of them. Both are still awaited before this function returns.
+  const planStored = (async () => {
+    // Attached before the plan is stored, so the stored artifact and the
+    // returned bundle carry the same openings rather than diverging.
+    const plan = { ...planned.plan, paths: await attachOpenings(planned.plan.paths) };
+
+    await Promise.all([
+      putAnalysisArtifact({
+        userId: resume.userId,
+        artifact: "plan",
+        expiresAt,
+        payload: plan,
+      }),
+      // The swapper runs after this request has already returned, so its
+      // routing has to outlive the process that computed it.
+      putAnalysisArtifact({
+        userId: resume.userId,
+        artifact: "routing",
+        expiresAt,
+        payload: {
+          sector: planned.sector,
+          searchKeywords: planned.searchKeywords,
+          adjacentKeywords: planned.adjacentKeywords,
+        },
+      }),
+    ]);
+
+    return plan;
+  })();
+  // Same reason as `document` above: this is awaited well after it settles.
+  planStored.catch(() => {});
+
+  const [[improverOutcome, advisorOutcome], plan] = await Promise.all([
+    specialists,
+    planStored,
   ]);
 
   if (improverOutcome.status === "rejected") {
@@ -221,16 +280,12 @@ export async function runAnalysis(
   // get the same treatment as the planner's paths. Done after the agent
   // returns rather than inside it: which roles suit this person is the
   // model's judgement, which postings are those roles is not.
-  const adviceWithOpenings =
-    advice && jobMatcher
-      ? {
-          ...advice.advice,
-          matchedRoles: withOpenings(
-            advice.advice.matchedRoles,
-            await jobMatcher.openingsFor(advice.advice.matchedRoles),
-          ),
-        }
-      : (advice?.advice ?? null);
+  const adviceWithOpenings = advice
+    ? {
+        ...advice.advice,
+        matchedRoles: await attachOpenings(advice.advice.matchedRoles),
+      }
+    : null;
 
   await Promise.all(
     [
@@ -312,20 +367,31 @@ export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
     return null;
   }
 
-  const result = await findCareerSwaps(
-    stored.profile,
-    stored.embedding.vector,
-    stored.routing.sector,
-    stored.routing.adjacentKeywords,
-  );
-
-  if (!result) return null;
-
+  // The matcher depends on nothing the swapper produces — it is one S3 read of
+  // the jobs snapshot — so it is fetched alongside rather than after.
+  //
   // The swapper's destinations are roles like any other, so they carry live
   // openings too. Matched against the same stored resume vector the agent
   // itself ranked with, so a destination's badges and its match score are
   // answering the same question.
-  const matcher = await createJobMatcher(stored.embedding.vector);
+  // Same disclaimed-skill filter as the main run. The stored profile carries
+  // `questionnaireEvidence`, so this second request reaches the same answer
+  // the first one did rather than quietly reverting to the raw parser list.
+  const [result, matcher] = await Promise.all([
+    findCareerSwaps(
+      stored.profile,
+      stored.embedding.vector,
+      stored.routing.sector,
+      stored.routing.adjacentKeywords,
+    ),
+    createJobMatcher(
+      stored.embedding.vector,
+      affirmedSkillNames(stored.profile),
+      disclaimedSkillNames(stored.profile),
+    ),
+  ]);
+
+  if (!result) return null;
 
   const swap: CareerSwap = matcher
     ? {

@@ -159,6 +159,20 @@ function mapJob(raw) {
     skills: (raw.skills || [])
       .filter((s) => s.isKeySkill)
       .map((s) => s.skill),
+    // The employer's own tags for what kind of work this is —
+    // "Information Technology", "Engineering", "Sales / Retail". Carried
+    // because a title alone cannot always say which field a posting belongs
+    // to: "Associate Systems Engineer" reads as either infrastructure or
+    // industrial, and this is the only place the answer is recorded.
+    //
+    // Employer-entered, multi-valued, and over-tagged — one "Software
+    // Engineer" in a 100-job sample carried Design + Engineering +
+    // Manufacturing and no IT tag at all, while a "Mechanical Engineer"
+    // claimed five categories. So this is a hint, never a filter; see
+    // `categoryAssist` in `src/lib/jobs/matching.ts`.
+    categories: (raw.categories || [])
+      .map((c) => (c && typeof c.category === "string" ? c.category.trim() : ""))
+      .filter(Boolean),
     // Singapore Standard Occupational Classification — the same taxonomy
     // family the SSG Skills Framework uses. Kept on the record as an
     // unexploited join key rather than dropped, since matching it against

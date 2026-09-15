@@ -453,9 +453,187 @@ So `lib/jobs/matching.ts` runs two stages, mirroring `lib/agents/role-matching.t
 1. **Lexical prefilter on the title.** Cheap, and it is what makes the question *"which postings are this role"* rather than *"which postings resemble this resume"*. Without it the same handful of best-fitting jobs attaches to every role indiscriminately, which reads as a recommendation and is not one.
 2. **The resume embedding, to rank what survived.** The prefilter knows the role matches; only the vector knows whether *this person* fits it.
 
-The embedding budget is the binding constraint, since a 24-hour snapshot carries well over a thousand postings and each embed is its own Bedrock call. Three caps hold it down: 12 candidates per role out of the prefilter, 40 embeds per run in total, 4 badges shown per role. The cache lives on the matcher, so a run that asks about the advisor's roles and then the planner's paths embeds each overlapping posting once.
+The embedding budget is the binding constraint, since a 24-hour snapshot carries well over a thousand postings and each embed is its own Bedrock call. Three caps hold it down: 12 candidates per role out of the prefilter, 80 embeds per **run**, 4 badges shown per role. The cache lives on the matcher, so a run that asks about the advisor's roles and then the planner's paths embeds each overlapping posting once.
+
+The run budget is spent from a single fairly-ordered queue, and the ordering matters. Taking each target's candidate list whole starved the last of them: four paths asking for twelve candidates each meant the first three spent the budget and the fourth silently showed no openings — for no reason but its position in the array. `fairShare` interleaves by rank instead, so every target gets its best candidate before any target gets its second, and a short budget degrades all of them equally.
 
 Openings are attached **before the artifact is stored**, so the stored analysis and the returned bundle agree. The trade is that a resumed analysis shows the vacancies that were live when it ran, not today's — acceptable while the alternative is re-embedding on every read.
+
+#### The score, and why it is not a raw cosine
+
+Titan returns unit-length vectors, so `cosineSimilarity` is a plain dot product and `matchScore` (`lib/bedrock/embeddings.ts`) rescales it from `[-1, 1]` to `[0, 100]`. That is arithmetically correct and **useless for job postings**, because resume-to-posting cosines occupy a narrow band near the bottom of that range. Every answer renders in the 50s and 60s, and four openings of genuinely different quality read as the same number.
+
+The band is measured, not assumed. One backend-engineer resume against the live snapshot, n=24:
+
+| Posting group | mean cosine | calibrated |
+|---|---|---|
+| software engineer | 0.255 | 68 |
+| developer / architect | 0.165 | 38 |
+| analyst / product manager | 0.099 | 16 |
+| nurse / chef / driver | 0.042 | 0 |
+
+The raw signal separates cleanly — a genuine match scores about six times an irrelevant one — so the fix is the mapping, not the embedding. `calibrate()` rescales the measured band onto the full range and clamps both ends:
+
+```
+score_embedding = clamp₀₁₀₀( (cosine − 0.05) / (0.35 − 0.05) × 100 )
+```
+
+**A first attempt used a floor of 0.25 by assumption. That is above the 90th percentile of real data (0.234), so nearly every posting clamped to zero** and four openings under one role all rendered as the identical number.
+
+The constants are measurements and go stale if the embedding model or the job source changes, so the measurement is a test rather than a note. `lib/jobs/calibration.itest.ts` re-takes it against the live snapshot, prints the table above, and fails if a strong match has stopped scoring as strong:
+
+```bash
+npx vitest run --project integration src/lib/jobs/calibration.itest.ts
+```
+
+The displayed score blends that with how well the posting's title matches the role it was found under:
+
+```
+matchScore = round( (0.7 × score_embedding/100 + 0.3 × titleOverlap) × 100 )
+
+titleOverlap = Σ weight(t) for t in roleConcepts ∩ jobConcepts
+               ────────────────────────────────────────────────
+                        Σ weight(t) for t in roleConcepts
+```
+
+Both halves are load-bearing. Resume fit alone ranks the same posting identically under every role it was found for — the prefilter gates membership but then contributes nothing, so *"Data Analyst"* and *"Business Analyst"* surface the same job in the same order. Title overlap alone ignores the candidate entirely. The weighting favours the resume because the title has already done gatekeeping work upstream; this is the tiebreak, not the primary signal. The overlap term is **free** — the prefilter computes it either way — so role-sensitivity costs no extra Bedrock call.
+
+`titleOverlap` normalises by the *role's* side, not the union, so `Data Analyst (Healthcare, 1-Year Contract)` still scores 1.0 against `Data Analyst`. Penalising a posting for extra qualifying words would rank a vaguer posting above a more specific one. Seniority words are stripped first (`TITLE_STOPWORDS`), since the resume vector judges seniority far better than matching "Senior" against "Senior" ever could.
+
+##### Why tokens are not counted equally
+
+They used to be, and it produced the wrong job board. Under `|roleTokens ∩ jobTokens| / |roleTokens|`, every one of these scored an identical **0.5** against *"Software Engineer"*:
+
+```
+Field Engineer · Sales Engineer · Mechanical Engineer · Full Stack Engineer · Software Developer
+```
+
+"Engineer" — a word four unrelated disciplines share — counted for exactly as much as "software", the word that says which job this actually is. The prefilter could not tell a real match from a word coincidence, and since the prefilter decides which postings reach the embedding at all, a snapshot full of `… Engineer` titles could fill every candidate slot before one software vacancy was looked at. That is how a software engineer's resume came back advertising field engineering.
+
+So each token is weighed by how much it narrows the field, and resolved to a canonical concept first:
+
+| Class | Weight | What it is |
+|---|---|---|
+| discipline | 1.0 | the field itself — `software`, `data`, `mechanical` |
+| qualifier | 0.6 | anything unrecognised, which in a job title is nearly always a real narrowing word |
+| function | 0.25 | the generic job word — `engineer`, `analyst`, `manager` |
+
+`MIN_TITLE_RELATEDNESS = 0.35` sits inside the one inequality that matters: on the two-token titles that dominate the board, sharing nothing but a function word (`0.25/1.25 = 0.20`) falls below sharing a single qualifier (`0.6/1.2 = 0.50`). Sharing only "engineer" is no longer a match at all.
+
+Canonicalisation fixes the recall half of the same bug. `DISCIPLINE_ALIASES` maps `fullstack`, `backend`, `java`, `react` and the rest onto `software`, so all of these now score **1.0** against *"Software Engineer"* despite sharing no token with it:
+
+```
+Full Stack Engineer · Backend Developer · Java Developer · DevOps Engineer
+```
+
+Three details carry their own weight:
+
+- **Compounds are collapsed before stopwords are removed.** `full stack` becomes `fullstack` first, so `Full Stack Engineer` keeps its discipline while `Software Engineer (Full Time)` still loses "full" and "time" as noise. Dropping "full" from the stopword list instead would have put *"Full Time"* into the token set of far more postings than it rescued.
+- **`developer` resolves to the `engineer` function, never to the software discipline.** Otherwise every *"Property Developer"* on the board becomes a perfect match for a software resume — the same error in the other direction.
+- **Unrecognised tokens are stemmed, recognised ones are not.** `Solutions Architect` and `Solution Architect` are one job written by two employers, and with a real floor an unmatched plural is the difference between showing a vacancy and dropping it. Alias entries are consulted raw first, so `devops` never becomes `devop`.
+
+Only families whose members are lexically unalike need an alias list. Two nursing titles already meet on "nurse" and two chef titles on "chef", so those sectors have no entry and need none — an unrecognised token is still treated as a narrowing word. Software is listed exhaustively because it is the family where almost nothing shares a word.
+
+**An alias is a strong claim, and the list stays small because of it.** Aliasing a word asserts it means one field *wherever it appears in a job title*. Measured against 1,491 live postings, these failed that test and are deliberately excluded:
+
+| Word | Why not |
+|---|---|
+| `application` | *Field Application Engineer* is a semiconductor role — the word means applying a part to a customer's design |
+| `warehouse` | 17 titles, 1 tagged IT; the rest drive forklifts |
+| `api` | the only live match was *Inspection Engineer (API 510 & API 570)* — petroleum institute codes |
+| `system` | 14 titles, 5 tagged IT: LiDAR, powertrain, avionics, SoC |
+| `platform` | includes *Sales Executive — BIM Software/Platform* |
+| `mobile` | *Mobile Crane Operator* |
+| `swift` | the interbank messaging network as often as the language |
+| `rails` | a railway before it is a web framework in this market |
+
+Nothing is lost by excluding them. A word left out is an ordinary qualifier, still matched exactly against another title using it, and still recoverable by the category assist below. Where a *following* word settles the meaning, the pair goes in `TITLE_COMPOUNDS` instead — which is exactly why `Application Developer` matches and `Application Engineer` does not, and why `Data Warehouse Engineer` matches and `Warehouse Assistant` does not.
+
+The asymmetry is the whole argument. A missed vacancy is quiet and recoverable; a false positive puts an electrical-engineering role at the top of a software engineer's list with a perfect score. `application` did exactly that — it scored *Field Application Engineer* at **1.00**, equal to *Embedded Software Engineer*.
+
+A role left with no posting above the floor shows **no openings**, which is the honest answer. Handing someone field-engineering vacancies reads as a recommendation, and it was never one.
+
+##### The employer's own tags, as a rescue and never a filter
+
+A title cannot always say which field it belongs to. *"Associate Systems Engineer — Virtualisation"* is infrastructure; *"Systems Engineer"* at a shipyard is not; nothing in either title distinguishes them, which is why `systems` and `platform` are deliberately **absent** from `DISCIPLINE_ALIASES`. The MCF feed answers this in a field the scraper previously discarded — `categories`, the employer's own tags for the nature of the work.
+
+The obvious move is to filter on it. Measuring 100 live postings says don't:
+
+```
+Software Engineer          -> Design + Engineering + Manufacturing     ← no IT tag at all
+Software Engineer, Google  -> Information Technology
+Mechanical Engineer        -> Building and Construction + Engineering + General Management
+                              + Real Estate / Property Management + Repair and Maintenance
+```
+
+Tags are employer-entered, multi-valued and freely over-tagged — one posting titled exactly *"Software Engineer"* carries no IT tag, while a *"Mechanical Engineer"* claims five categories including Real Estate. **Requiring the category to agree would drop a genuine software vacancy** — a worse bug than the one this section fixes.
+
+So the tag **strengthens a posting that already qualifies and can never admit one**. The prefilter gates on the lexical score alone; the assist (`CATEGORY_ASSIST = 0.1`) is added afterwards and flows into the displayed score through `TITLE_WEIGHT`, worth at most 3 points there.
+
+An earlier version let the assist cross the floor, which sounded like recall and was in fact the reported bug returning. `Field Application Engineer` scores exactly 0.20 against `Software Engineer` — a function-word-only match — and employers tag those postings *Information Technology*, 5 of 5 in the sample. An assist of 0.25 walked the reported title straight back in at 0.45. Two things stop that now: the gate reads the lexical score, and the assist is sized below the 0.15 gap a function-word-only match would have to cross, so the guarantee holds structurally even if the gate is ever changed.
+
+Snapshots written before the scraper captured this field have no tags, and absent is treated exactly like "no hint". **The assist only takes effect once the scraper Lambda is redeployed and has published a fresh `latest.json`** — and because it can no longer change which postings appear, that redeploy cannot alter the result set, only the ordering within it.
+
+##### What the questionnaire contributes to the ranking
+
+Until now, nothing. The quiz enriched the embedded text and corrected the skill gap, but had no say in *which* vacancies were shown: a posting demanding the one skill someone had just answered "never used" to ranked exactly as high as one that did not.
+
+It now contributes in two places, and the first is what decides *what gets tokenized at all*: **a disclaiming answer is excluded from the embedded text**. Embedding models do not represent negation — "I have never used Kubernetes directly" carries the token `Kubernetes` either way — so appending it moved the résumé vector *toward* the skill the candidate had just ruled out, directly against the demotion below. `enrichedEmbeddingText` now appends only affirming statements. The disclaimer is still kept on the profile for the agents to read as prose; it is barred only from the one place where it would do the reverse of its meaning.
+
+The second is ranking. `disclaimedSkillNames` is the complement of `affirmedSkillNames`, and the distinction is load-bearing. A skill merely absent from a résumé is an ordinary gap — half the board would demand one. A skill the candidate was *shown and disclaimed* is a statement of fact from them, and the strongest evidence the quiz produces that a vacancy is a poor fit. Only the second demotes:
+
+```
+score = blended × (1 − 0.3 × share of the posting's key skills the candidate disclaimed)
+```
+
+Applied as a share rather than a flat penalty, so one disclaimed skill in eight is a dent and three in four is most of the score. It sits **outside** the blend rather than becoming a third weighted term, so the two measured calibration constants keep meaning what they were measured to mean — and multiplicatively, so it can only lower a score, never lift one. The posting is demoted, never hidden: it is still a real vacancy, and the skill is still reported as one to add.
+
+Measured effect of the two fixes together, same resume and snapshot:
+
+| Role | before | after |
+|---|---|---|
+| Software Engineer | 43, 41, 37, 36 | 100, 96, 90, 88 |
+| Data Analyst | 30, 30, 15, 15 | 54, 49, 38, 36 |
+| Product Manager | 30, 30, 30, 30 | 66, 50, 49, 45 |
+
+Spread across twelve openings went from 28 points to 64. Product Manager's four identical 30s are the diagnostic: that was the title term alone, with the embedding term fully clamped.
+
+> Measured **before** the weighted-token change described above, which moves the title term and changes which postings are in the set at all. The calibration constants are unaffected — `calibration.itest.ts` still verifies those — but these twelve figures have not been re-taken against a live snapshot since.
+
+#### The skill gap: the half of the score a user can act on
+
+A number tells someone where they stand and gives them nothing to do about it. Both sides of the comparison are already on hand — MyCareersFuture marks each posting's key skills, and the parser extracts what the resume evidences — so the gap is set arithmetic, no inference:
+
+```
+matchedSkills = { s ∈ job.skills : ∃ r ∈ resume.skills, meet(s, r) }
+missingSkills = job.skills \ matchedSkills
+```
+
+`meet` compares token sets rather than strings, because the two vocabularies are written by different parties. The employer writes *Team Leadership* where the resume says *Leadership*; *Microsoft Excel* against *Excel*; *React.js* against *React*. Treating those as different would report a gap that does not exist, which is the failure that would make this advice worse than silence. Two skills meet when their shared tokens cover the smaller of the two sets — subset-or-better, so an incidental shared word (*Project Management* against *Project Finance*) does not match.
+
+Per role, the openings are then aggregated into an `OpeningsGap` ordered by **how many of the openings ask for each missing skill**:
+
+```
+gap.missing = [ { skill, wantedBy } ] sorted by wantedBy desc, then alphabetically
+```
+
+That ordering is the point. A skill three of four employers want is a stronger instruction than the same skill wanted once, however prominent it looked on a single posting — so the list reads as ranked next actions rather than an undifferentiated pile. Ties break alphabetically so the order is stable between runs.
+
+#### Questionnaire evidence: two paths, and only one of them is the vector
+
+The questionnaire reaches the match through two separate routes, and conflating them is the mistake to avoid.
+
+**Into the vector, already.** `embedParsedResume` refines the résumé prose with the accepted statements, then `enrichedEmbeddingText` re-appends any the rewrite dropped, and only then embeds. So the résumé vector — the one every cosine in this section is measured against — already carries questionnaire signal. Nothing in `lib/jobs/matching.ts` needed changing for that.
+
+**Into the skill gap, deliberately filtered.** Questions for the proficiency, recency and context facets are generated *from* `profile.skills[index]`, so their anchor is verbatim a skill name. The questionnaire therefore never introduces a skill — it confirms or refutes one the parser already extracted. And every option sets `contributesEvidence: true`, the disclaiming one included, because *"I have never used Kubernetes directly"* is a fact worth recording.
+
+That makes the naive integration actively wrong. Feeding statements into the skill matcher as pseudo-skills would let *"I have never used Kubernetes"* mark Kubernetes as **covered**, telling someone they hold a skill they had just finished saying they lack. So `affirmedSkillNames` (`lib/resume/questionnaire.ts`) drops any skill whose anchor appears in a disclaiming answer, and the orchestrator passes that filtered list to the matcher on both the analysis and the swap path.
+
+Polarity lives beside the templates that create it, as a set of the three canonical disclaiming labels — not as a regex over statement prose in the consumer. Prose matching is the fragility the canonical-template design exists to prevent. Scope answers are never disclaiming: *"contributed individually without coordinating others"* is a real scope, not an absence of the skill, and reading it as one would strip skills from every candidate who has never managed anyone.
+
+One consequence is measured rather than assumed, in `calibration.itest.ts`: embedding models represent negation poorly, and a disclaiming statement carries the skill's own name, so it can move the vector *toward* the skill it denies. The **skill gap is immune** — polarity is resolved exactly, before the matcher sees anything. The **match score is not**, and the test reports the size of the shift.
+
+**Three states, not two.** Many MyCareersFuture postings list no skills at all. Such a posting has an empty `missingSkills`, but calling that a *"full match"* would claim a fit that was never assessed — so it gets no label, and a role whose openings all list nothing shows no gap panel rather than congratulating the reader on an unrun check.
 
 Both tiers end the Transitioner branch with **real, publicly funded career coaching services** (`lib/agents/coaches.ts`). That list is a verified constant, never model output, because a hallucinated agency or dead link is the one failure here whose cost lands outside the browser. The model only writes *what to ask* once the user gets there, tailored to the destinations it just produced.
 
@@ -639,6 +817,8 @@ The jobs scraper is outside the Next.js app and has its own runner, from the rep
 | `node --test lambda/jobs-scraper/handler.test.js` | Scraper field mapping, offline against a captured fixture |
 | `bash iac/sync-env.sh` | Rewrites `.env.local` from Terraform outputs |
 
+One integration test is run on purpose rather than as part of a suite, because it is a measuring instrument: `npx vitest run --project integration src/lib/jobs/calibration.itest.ts` re-derives the cosine band the job-match score is calibrated against. Run it after changing the embedding model or the job source.
+
 The integration suite prints its own per-agent timings and per-run cost on every run, which is where the figures in this README come from.
 
 ---
@@ -689,7 +869,10 @@ frontend/meong-my-way/src/
     ├── bedrock/           # Converse wrapper (reason.ts) + embeddings.ts
     ├── ssg/                # SSG-WSG API client + OAuth token cache
     ├── jobs/               # snapshot types + S3 reader + matching.ts
-    │                       # (prefilter then embed; attaches openings to roles)
+    │                       # (prefilter, embed, calibrate; attaches openings
+    │                       #  and the skill gap to roles and paths)
+    │                       # + calibration.itest.ts: re-measures the cosine
+    │                       #   band the score constants are derived from
     ├── resume/             # upload validation, S3/DynamoDB store, client, pipeline
     ├── analysis/           # browser-side client for /api/analysis and /swap
     ├── auth/               # Amplify client wrapper, server-side JWT verification, route guard
@@ -796,8 +979,17 @@ Four separate links in that chain, and all four fail the same silent way — no 
 3. **Does the app know the bucket?** `grep S3_JOBS_BUCKET frontend/meong-my-way/.env.local`. Absent means `sync-env.sh` has not run since the apply. `getJobsConfig()` then returns `null` and every opening is dropped. **This is the most common cause.** Fix it, then restart the dev server — Next.js reads env at server start.
 4. **Is the analysis new enough?** Openings are attached when an analysis runs and stored with it. An analysis produced before the scraper existed has none, and *"view previous results"* reads exactly that stored artifact. Run a fresh analysis rather than reopening the old one.
 
+**Every opening under a role shows the same match score**
+The embedding term has clamped, so the number on screen is the title term alone (`0.3 × titleOverlap`, i.e. 30 for any posting whose title fully matches the role). `COSINE_FLOOR` / `COSINE_CEILING` in `lib/jobs/matching.ts` no longer fit the data — most likely because the embedding model or the job source changed underneath them. Re-measure:
+
+```bash
+npx vitest run --project integration src/lib/jobs/calibration.itest.ts
+```
+
+That prints the current band means and fails when a strong match has stopped reading as strong. Set the floor just above the irrelevant band and the ceiling at the top of what a strong match reaches. See [The score](#the-score-and-why-it-is-not-a-raw-cosine).
+
 **The disclosure appears on some roles but not others**
-Expected, and the reason it is dropped rather than shown empty. The prefilter needs at least one meaningful title token in common, so an SSG role title that no posting resembles gets nothing rather than being handed the snapshot's best-fitting jobs regardless — that floor is deliberate. Framework titles are also more formal than market ones ("Software and Applications Developer" against "Software Engineer"), so overlap varies by role. Seniority words are stripped before matching, since the resume vector judges seniority far better than a title token can.
+Expected, and the reason it is dropped rather than shown empty. The prefilter needs weighted title relatedness of at least `MIN_TITLE_RELATEDNESS` (0.35), so an SSG role title that no posting genuinely resembles gets nothing rather than being handed the snapshot's best-fitting jobs regardless — that floor is deliberate, and sharing only a generic word like "engineer" now falls below it. Framework titles are also more formal than market ones ("Software and Applications Developer" against "Software Engineer"), so relatedness varies by role. Seniority words are stripped before matching, since the resume vector judges seniority far better than a title token can.
 
 **Results say the destinations are "reasoned" rather than drawn from the framework**
 Expected when the Skills Framework returns nothing, but worth checking if it happens on every run. Usually `SSG_CLIENT_ID` and `SSG_CLIENT_SECRET` are unset or were rejected: the seven endpoints are published as "Authentication: Open" but answer 401 without a bearer token. The server logs `[swapper] ... falling back` or `[advisor] ... falling back` with the cause. Set `SSG_API_BASE_URL=https://mock-public-api.ssg-wsg.sg` to develop against canned data.

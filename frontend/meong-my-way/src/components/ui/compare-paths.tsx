@@ -10,12 +10,12 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import type { CareerPath, GapSeverity, PathKind, ResumeProfile } from "@/lib/contracts";
+import type { CareerPath, PathKind, ResumeProfile } from "@/lib/contracts";
 import { cn, formatCompactMoney } from "@/lib/utils";
 import { Meter } from "./primitives";
 import { OpeningBadges, openingsLabel } from "./opening-badges";
+import { SkillGapList } from "./skill-gap-list";
 import styles from "./career-workspace.module.css";
-import { CriticalIcon, ModerateIcon, SeriousIcon } from "./icons";
 
 /** A destination shelf with a consistent detail panel for each path.
  * Details start closed so the summary remains scannable, then expand individually.
@@ -28,15 +28,6 @@ const KIND_META: Record<PathKind, { label: string; dot: string }> = {
   progression: { label: "Natural progression", dot: "bg-[var(--cat-progression)]" },
   adjacent: { label: "Adjacent move", dot: "bg-[var(--cat-adjacent)]" },
   pivot: { label: "Genuine pivot", dot: "bg-[var(--cat-pivot)]" },
-};
-
-const SEVERITY_META: Record<
-  GapSeverity,
-  { label: string; className: string; Icon: (p: { className?: string }) => React.ReactElement }
-> = {
-  critical: { label: "Critical", className: "text-critical", Icon: CriticalIcon },
-  serious: { label: "Serious", className: "text-serious", Icon: SeriousIcon },
-  moderate: { label: "Moderate", className: "text-warning", Icon: ModerateIcon },
 };
 
 type Row = {
@@ -80,7 +71,9 @@ const ROWS: Row[] = [
     label: "Suggested job openings",
     Icon: Briefcase,
     left: () => null,
-    right: (path) => <OpeningBadges openings={path.openings ?? []} />,
+    right: (path) => (
+      <OpeningBadges openings={path.openings ?? []} gap={path.openingsGap} />
+    ),
   },
   {
     key: "why",
@@ -111,32 +104,9 @@ const ROWS: Row[] = [
     label: "What's missing",
     Icon: TriangleAlert,
     left: () => null,
-    right: (path) =>
-      path.gaps.length === 0 ? (
-        <p className="text-[13px] text-ink-muted">Nothing blocking was identified.</p>
-      ) : (
-        <ul className="space-y-3">
-          {path.gaps.map((gap) => {
-            const meta = SEVERITY_META[gap.severity];
-            return (
-              <li key={gap.skill} className="flex gap-2.5">
-                <meta.Icon className={cn("mt-0.5 h-4 w-4 shrink-0", meta.className)} />
-                <div className="min-w-0">
-                  <p className="text-[13.5px] font-medium text-ink">
-                    {gap.skill}
-                    <span className="ml-2 text-[12px] font-normal text-ink-muted">
-                      {meta.label}
-                    </span>
-                  </p>
-                  <p className="mt-0.5 text-[13px] leading-relaxed text-ink-2">
-                    {gap.remedy}
-                  </p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      ),
+    right: (path) => (
+      <SkillGapList gaps={path.gaps} emptyLabel="Nothing blocking was identified." />
+    ),
   },
   {
     key: "route",

@@ -12,10 +12,11 @@ import {
 import { CareerTabs } from "@/components/ui/career-tabs";
 import styles from "@/components/ui/career-workspace.module.css";
 
-import type { AnalysisBundle, ResumeRewrite } from "@/lib/contracts";
+import type { AnalysisBundle, MatchedRole, ResumeRewrite } from "@/lib/contracts";
 import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
 import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
+import { SkillGapList } from "@/components/ui/skill-gap-list";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { ResultsToolbar } from "@/components/ui/results-toolbar";
 import { cn, formatCompactMoney } from "@/lib/utils";
@@ -47,6 +48,68 @@ function SuggestedRewrite({ text }: { text: string }) {
       </strong>
     );
   });
+}
+
+/**
+ * What the match meter on a role actually means, and how to move it.
+ *
+ * The meter on its own was a number with nothing behind it — it told someone
+ * where they stood and gave them no way to act. This is the other half: what
+ * the resume is already getting credit for, and what it is not.
+ *
+ * Rendered closed, beside "Why this fits", so the roles list stays scannable.
+ * Absent for a run stored before the advisor produced either list, which is
+ * why both sides are optional and the whole disclosure disappears when there
+ * is nothing truthful to put in it.
+ */
+function RoleGuidance({ role }: { role: MatchedRole }) {
+  const strengths = role.strengths ?? [];
+  const gaps = role.gaps ?? [];
+
+  if (strengths.length === 0 && gaps.length === 0) return null;
+
+  return (
+    <details className={styles.inlineDetail}>
+      <summary>
+        How to raise this match
+        <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
+      </summary>
+      <div className={styles.inlineDetailBody}>
+        {/* Deliberately says "compares", not "is the cosine similarity of":
+            the framework tier scores by embedding and the reasoned tier by the
+            model's own judgement, and this line has to stay true of both. */}
+        <p className="text-[12.5px] leading-relaxed text-ink-muted">
+          {role.matchScore}/100 is how closely your resume reads against what
+          this role asks for. Evidencing the items below is what moves it.
+        </p>
+
+        {strengths.length > 0 ? (
+          <div className="mt-4">
+            <SectionLabel>What is already carrying it</SectionLabel>
+            <ul className="mt-2 space-y-1.5" role="list">
+              {strengths.map((strength) => (
+                <li key={strength} className="flex gap-2">
+                  <Check aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+                  <p className="min-w-0 text-[13px] leading-relaxed text-ink-2">
+                    {strength}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {gaps.length > 0 ? (
+          <div className="mt-4">
+            <SectionLabel>What is holding it back</SectionLabel>
+            <div className="mt-2">
+              <SkillGapList gaps={gaps} />
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
 }
 
 function RewriteRow({ rewrite }: { rewrite: ResumeRewrite }) {
@@ -169,7 +232,11 @@ export function AdvisorStage({
                         <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
                       </summary>
                       <div className={styles.inlineDetailBody}>
-                        <OpeningBadges openings={role.openings} className="mt-1" />
+                        <OpeningBadges
+                          openings={role.openings}
+                          gap={role.openingsGap}
+                          className="mt-1"
+                        />
                       </div>
                     </details>
                   ) : null}
@@ -185,6 +252,8 @@ export function AdvisorStage({
                       </div>
                     </details>
                   ) : null}
+
+                  <RoleGuidance role={role} />
                 </article>
               ))}
             </div>

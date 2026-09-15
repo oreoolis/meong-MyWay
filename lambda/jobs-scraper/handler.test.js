@@ -28,6 +28,10 @@ const FIXTURE_JOB = {
     { skill: "Marketing", isKeySkill: true },
   ],
   ssocCode: "14391",
+  categories: [
+    { id: 24, category: "Marketing / Public Relations" },
+    { id: 35, category: "Sales / Retail" },
+  ],
   metadata: {
     jobPostId: "MCF-2026-1616317",
     createdAt: "2026-09-14T07:02:07.000Z",
@@ -49,8 +53,20 @@ test("mapJob extracts the contract fields from a real MCF job object", () => {
     url: "https://www.mycareersfuture.gov.sg/job/sales/marketing-simple-recruit-d947eaeb7a539c065252287a51c756ee",
     salary: { minimum: 3000, maximum: 5000, type: "Monthly" },
     skills: ["Leadership", "Marketing"],
+    categories: ["Marketing / Public Relations", "Sales / Retail"],
     ssocCode: "14391",
   });
+});
+
+test("mapJob keeps categories empty rather than null when the employer tagged none", () => {
+  assert.deepEqual(mapJob({ ...FIXTURE_JOB, categories: undefined }).categories, []);
+  // Malformed entries are dropped individually, not taken as a whole-field
+  // failure — a tag list is a hint, and a partial one is still a usable hint.
+  assert.deepEqual(
+    mapJob({ ...FIXTURE_JOB, categories: [{ id: 1 }, null, { category: "  Engineering  " }] })
+      .categories,
+    ["Engineering"],
+  );
 });
 
 test("mapJob drops a job missing its id, url, or postedAt", () => {

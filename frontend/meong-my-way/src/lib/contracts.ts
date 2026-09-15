@@ -141,8 +141,43 @@ export type JobOpening = {
   /** ISO-8601 UTC, from the snapshot. */
   postedAt: string;
   salary: SalaryBand | null;
-  /** 0–100. Cosine similarity of the posting against the resume embedding. */
+  /**
+   * 0–100. How well this posting fits, blending the resume embedding with how
+   * closely the posting's title matches the role it was found under.
+   *
+   * Calibrated rather than raw: see `lib/jobs/matching.ts`. Résumé-to-posting
+   * cosines occupy a narrow band near the bottom of [-1, 1], so rescaling that
+   * range linearly puts every real answer in the 50s and 60s — measured, an
+   * irrelevant posting lands at 52 and a strong match at 63. That reads as
+   * "everything is a decent match" and discriminates nothing.
+   */
   matchScore: number;
+  /** The posting's key skills this resume already evidences. */
+  matchedSkills: string[];
+  /**
+   * The posting's key skills this resume does not evidence.
+   *
+   * The actionable half of the score: a number tells someone where they stand,
+   * this tells them what to do about it.
+   */
+  missingSkills: string[];
+};
+
+/**
+ * What a set of openings says about the gap between a resume and a role.
+ *
+ * Aggregated across the openings shown for one role rather than reported per
+ * posting, because the decision it supports is "should I pursue this role, and
+ * what do I need first" — and one skill wanted by three of four employers is a
+ * far stronger signal than the same skill wanted by one.
+ */
+export type OpeningsGap = {
+  /** Skills most wanted across these openings that the resume lacks. */
+  missing: { skill: string; /** How many of the openings ask for it. */ wantedBy: number }[];
+  /** Skills the resume already evidences that these openings ask for. */
+  covered: string[];
+  /** How many openings the two lists were computed across. */
+  openingCount: number;
 };
 
 export type CareerPath = {
@@ -169,6 +204,8 @@ export type CareerPath = {
    * same thing to the UI: show no badges.
    */
   openings?: JobOpening[];
+  /** What those openings collectively want that the resume lacks. */
+  openingsGap?: OpeningsGap;
 };
 
 export type CurrentTrajectory = {
@@ -245,8 +282,32 @@ export type MatchedRole = {
   salary: SalaryBand | null;
   /** Why the model thinks this role fits — not from the API. */
   rationale: string;
+  /**
+   * What the resume already evidences for this role.
+   *
+   * The half of the score that is already earned. Shown beside `gaps` so the
+   * number reads as a position rather than a verdict — "here is what is
+   * carrying it, here is what is holding it back".
+   */
+  strengths?: string[];
+  /**
+   * What this role asks for that the resume does not evidence, and how to
+   * close each one.
+   *
+   * The actionable half of `matchScore`. Without it the meter is a number with
+   * nothing behind it: it tells someone where they stand and gives them
+   * nothing to do about it.
+   *
+   * Model-named but not model-trusted — every entry is filtered against the
+   * resume's own affirmed skills in `industry-advisor.ts` before it ships, so
+   * a gap can never name something the candidate already has. Optional because
+   * an analysis stored before this existed simply has none.
+   */
+  gaps?: SkillGap[];
   /** Live vacancies for this role, best fit first. See `JobOpening`. */
   openings?: JobOpening[];
+  /** What those openings collectively want that the resume lacks. */
+  openingsGap?: OpeningsGap;
 };
 
 export type IndustryAdvice = {
