@@ -1,5 +1,5 @@
 {
-  "evaluatedAt": "2026-09-14T05:27:00.500Z",
+  "evaluatedAt": "2026-09-15T05:18:30.459Z",
   "fixture": "synthetic operations analyst",
   "roles": {
     "cloud": "Cloud operations engineer. Independently uses AWS to operate cloud workloads, investigate operational issues and maintain reliable infrastructure.",
@@ -13,8 +13,8 @@
   "texts": {
     "baseline": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.",
     "skipped": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.",
-    "independent": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI used AWS independently, without responsibility for other people's use.",
-    "governance": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI used AWS and was responsible for guiding or governing its use by others."
+    "independent": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI used AWS independently.",
+    "governance": "Operations analyst with three years of experience preparing reports and maintaining data quality. Listed tools include AWS, SQL and Python.\nAdditional factual experience reported by the candidate:\nI guided or governed other people's use of AWS."
   },
   "cosineSimilarities": {
     "baseline": {
@@ -36,22 +36,22 @@
       "support": 0.41822067536047886
     },
     "independent": {
-      "cloud": 0.4126980996546583,
-      "reporting": 0.622339998272065,
-      "governance": 0.15309259242441203,
-      "unrelated": 0.01001043057594138,
-      "coordination": 0.24947930596486884,
-      "dataQuality": 0.2879083595780471,
-      "support": 0.4145675046181252
+      "cloud": 0.3893732342600444,
+      "reporting": 0.6287834231349595,
+      "governance": 0.1350653354174691,
+      "unrelated": 0.010566827618860722,
+      "coordination": 0.25140956014910076,
+      "dataQuality": 0.28794701314200905,
+      "support": 0.4093410221852086
     },
     "governance": {
-      "cloud": 0.40349437515213377,
-      "reporting": 0.6283521757458439,
-      "governance": 0.1772034775476593,
-      "unrelated": 0.01153800845206884,
-      "coordination": 0.2624470962374268,
-      "dataQuality": 0.3058825952585459,
-      "support": 0.4175713252567653
+      "cloud": 0.414246128664901,
+      "reporting": 0.6141937722607677,
+      "governance": 0.19796831854863262,
+      "unrelated": 0.0145491021877546,
+      "coordination": 0.2629045127378326,
+      "dataQuality": 0.2900727444235808,
+      "support": 0.40939110740994744
     }
   },
   "rankings": {
@@ -84,8 +84,8 @@
     ],
     "governance": [
       "reporting",
-      "support",
       "cloud",
+      "support",
       "dataQuality",
       "coordination",
       "governance",
