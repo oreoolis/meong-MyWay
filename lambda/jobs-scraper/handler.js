@@ -17,7 +17,7 @@
  */
 
 const API_BASE = "https://api.mycareersfuture.gov.sg/v2/jobs";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 // Required lazily, inside `publish()`, rather than at module load.
 // `@aws-sdk/client-s3` ships in the Lambda Node.js 20.x runtime but is not an
@@ -60,8 +60,62 @@ function loadConfig(env) {
     // government-wide portal should exhaust in a handful of pages. Existing
     // only so a pathological response (a broken cutoff, a sort that stopped
     // working) can't turn into an unbounded fetch loop.
+    //
+    // Measured, it is not a safety cap at all: every daytime run exits on it,
+    // because MCF serves a full page every time and the 24-hour cutoff is
+    // never reached. One fetch sees five or six hours, not a day. That is the
+    // reason the pool below exists.
     maxPages: Number(env.JOBS_MAX_PAGES || 20),
+    // How long a posting stays in the pool, counted from when MCF recorded
+    // it. This is the window the app actually matches against, and it is the
+    // one number that decides how much of the market a candidate is compared
+    // to — unlike the fetch window above, which the API will not honour.
+    retentionDays: Number(env.JOBS_RETENTION_DAYS || 7),
+    // A guard on the pool's size, not a target. Retention is what should bound
+    // it; this only stops a date-parsing regression from growing the object
+    // until the Lambda runs out of memory.
+    maxPoolJobs: Number(env.JOBS_MAX_POOL || 40000),
   };
+}
+
+/**
+ * Fold a freshly fetched batch into the pool the last run left behind.
+ *
+ * The scraper used to publish whatever one fetch saw, which made the snapshot
+ * a function of the hour the Lambda fired rather than of the market. Measured
+ * across three consecutive real runs: 1,710 postings at 09:03, then 227 at
+ * 21:02, then 1,712 at 09:05. The overnight run held no software vacancies at
+ * all, and it overwrote a healthy snapshot to become what every resume was
+ * matched against for the next twelve hours.
+ *
+ * Merging makes the pool a function of `retentionDays` instead. A posting
+ * enters when a run first sees it and leaves when it ages out, so the app
+ * compares a candidate against a week of the market rather than against
+ * whatever was posted in the last five hours.
+ */
+function mergePool(existing, fetched, options) {
+  const { retentionDays, now, maxJobs = Infinity } = options;
+  const cutoff = now - retentionDays * 86400 * 1000;
+
+  // Keyed by MCF's own posting id. The fetched copy is written second so it
+  // wins: a posting whose title or salary was edited should carry the current
+  // wording, not the one first seen days ago.
+  const byId = new Map();
+  for (const job of existing || []) byId.set(job.id, job);
+  for (const job of fetched || []) byId.set(job.id, job);
+
+  const kept = [];
+  for (const job of byId.values()) {
+    const postedAt = Date.parse(job.postedAt);
+    // A date that cannot be read can never age out, so it would pin itself in
+    // the pool permanently. Dropped rather than kept forever.
+    if (!Number.isFinite(postedAt) || postedAt < cutoff) continue;
+    kept.push(job);
+  }
+
+  kept.sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt));
+
+  return kept.length > maxJobs ? kept.slice(0, maxJobs) : kept;
 }
 
 /* -------------------------------------------------------------------------
@@ -239,6 +293,32 @@ async function collectRecentJobs(cfg, now = new Date()) {
  * snapshot rather than a pointer to something never written. Same ordering
  * `putResume()` uses in `src/lib/resume/store.ts`.
  */
+/**
+ * The pool the last run published, or an empty one on the very first run.
+ *
+ * A read failure is *not* absorbed. Treating an unreadable pool as an empty
+ * one would publish a single fetch over a week of accumulated postings — the
+ * exact loss this feature exists to prevent — so anything other than a missing
+ * object is raised, which leaves `latest.json` untouched and surfaces on the
+ * Lambda error alarm.
+ */
+async function readPool(cfg) {
+  const { GetObjectCommand } = require("@aws-sdk/client-s3");
+
+  try {
+    const { Body } = await getS3().send(
+      new GetObjectCommand({ Bucket: cfg.bucket, Key: `${cfg.prefix}/latest.json` }),
+    );
+    if (!Body) return [];
+
+    const parsed = JSON.parse(await Body.transformToString("utf-8"));
+    return Array.isArray(parsed.jobs) ? parsed.jobs : [];
+  } catch (error) {
+    if (error.name === "NoSuchKey" || error.name === "NotFound") return [];
+    throw error;
+  }
+}
+
 async function publish(payload, cfg) {
   const { PutObjectCommand } = require("@aws-sdk/client-s3");
   const stamp = payload.fetchedAt.replace(/:/g, "-");
@@ -267,19 +347,33 @@ async function publish(payload, cfg) {
 
 async function handler() {
   const cfg = loadConfig(process.env);
-  const { jobs, pagesFetched, hitPageCap, cutoff } = await collectRecentJobs(cfg);
+  const { jobs: fetched, pagesFetched, hitPageCap, cutoff } = await collectRecentJobs(cfg);
 
   // Never publish an empty snapshot over a good one. An empty result is far
   // more likely to mean the API shape changed under us than that nobody in
   // Singapore posted a job in 24 hours — raising here leaves `latest.json`
   // untouched and surfaces loudly as a Lambda error instead.
-  if (jobs.length === 0) {
+  if (fetched.length === 0) {
     throw new Error(
       `fetched 0 jobs across ${pagesFetched} page(s) — refusing to publish an empty snapshot`,
     );
   }
 
+  // Read before write. A failure here raises rather than falling back to an
+  // empty pool, because publishing one fetch over a week of postings is the
+  // failure this whole step exists to avoid.
+  const existing = await readPool(cfg);
+  const jobs = mergePool(existing, fetched, {
+    retentionDays: cfg.retentionDays,
+    now: Date.now(),
+    maxJobs: cfg.maxPoolJobs,
+  });
+
   const fetchedAt = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const oldest = jobs.length ? jobs[jobs.length - 1].postedAt : null;
+
+  const fetchedIds = new Set(fetched.map((job) => job.id));
+  const carriedOver = jobs.reduce((n, job) => (fetchedIds.has(job.id) ? n : n + 1), 0);
 
   const payload = {
     schemaVersion: SCHEMA_VERSION,
@@ -291,14 +385,24 @@ async function handler() {
       jobCount: jobs.length,
       cutoff: cutoff.toISOString(),
       hitPageCap,
+      // What this run contributed, against what the pool now holds. A run that
+      // adds almost nothing is normal overnight; a run whose pool *shrinks*
+      // sharply is not, and these two numbers are what make that visible.
+      fetchedThisRun: fetched.length,
+      carriedOver,
+      retentionDays: cfg.retentionDays,
+      oldestPostedAt: oldest,
     },
     jobs,
   };
 
   const key = await publish(payload, cfg);
-  console.log(`published ${jobs.length} jobs to s3://${cfg.bucket}/${key}`);
+  console.log(
+    `fetched ${fetched.length} across ${pagesFetched} page(s); pool now ${jobs.length} ` +
+      `over ${cfg.retentionDays}d (oldest ${oldest}) -> s3://${cfg.bucket}/${key}`,
+  );
 
-  return { jobs: jobs.length, pagesFetched, key };
+  return { jobs: jobs.length, fetched: fetched.length, pagesFetched, key };
 }
 
-module.exports = { handler, loadConfig, mapJob, locationOf, collectRecentJobs };
+module.exports = { handler, loadConfig, mapJob, locationOf, collectRecentJobs, mergePool, readPool };

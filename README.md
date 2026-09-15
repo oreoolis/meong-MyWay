@@ -729,9 +729,37 @@ aws lambda invoke --function-name meong-myway-jobs-scraper out.json && cat out.j
 bash iac/sync-env.sh
 ```
 
-Expect `{"jobs":N,...}` with `N` above zero. The Lambda **raises rather than publishing an empty snapshot**, so a failure here is loud and `jobs/latest.json` keeps its last good contents — an empty job market shown to every user is a worse outcome than a stale one, and the CloudWatch alarm exists to catch exactly that.
+Expect `{"jobs":N,"fetched":M,...}` with `N` above zero. The Lambda **raises rather than publishing an empty snapshot**, so a failure here is loud and `jobs/latest.json` keeps its last good contents — an empty job market shown to every user is a worse outcome than a stale one, and the CloudWatch alarm exists to catch exactly that.
 
-If `meta.hitPageCap` comes back `true`, paging stopped at the page cap instead of the 24-hour cutoff, so the window is truncated. Raise `JOBS_MAX_PAGES` in `iac/jobs.tf`.
+#### The pool, and why one fetch is not a snapshot
+
+`jobs` is an **accumulating pool**, not the result of one fetch. Each run merges what it sees into what the last run left, keyed by MCF's posting id, and evicts anything older than `JOBS_RETENTION_DAYS` (7).
+
+It was a single fetch until three consecutive real runs showed what that costs:
+
+| Run | Postings | Pages | `hitPageCap` | Span | Software titles |
+|---|---|---|---|---|---|
+| 2026-09-14T09:03Z | 1,710 | 20 | `true` | 6.0h | 43 |
+| 2026-09-14T21:02Z | **227** | 3 | `false` | 12.0h | **0** |
+| 2026-09-15T09:05Z | 1,712 | 20 | `true` | 4.9h | 58 |
+
+The overnight run collected 227 postings with **no software vacancies in it at all**, overwrote a healthy snapshot, and became what every résumé was matched against for the next twelve hours. Its single `application engineer` posting was a *Field Application Engineer* — which is how a software engineer's résumé came back advertising electrical engineering. The pool was starved, and the pool being starved is invisible from inside the app.
+
+Two independent limits cause it, and neither is fixable by widening `JOBS_WINDOW_SECONDS`:
+
+- **Daytime runs exit on the page cap.** MCF serves a full page every time, so `results.length < pageLimit` never fires and the 24-hour cutoff is never reached inside `JOBS_MAX_PAGES`. One fetch sees five or six hours.
+- **Overnight, the feed genuinely runs out.** The API does not expose 24 hours of history to paginate through, so the 21:02 run exhausted it in three pages.
+
+So the fetch window is not the lever; retention is. `JOBS_WINDOW_SECONDS` still bounds one fetch and is left at 24h, but the number that decides how much of the market a candidate is compared to is `JOBS_RETENTION_DAYS`.
+
+Two rules keep the pool honest, both of which fail loudly rather than quietly:
+
+- **Read before write, and never fall back to empty.** `readPool()` raises on anything but a missing object. Treating an unreadable pool as an empty one would publish a single fetch over a week of postings — precisely the loss this exists to prevent — so a missing `s3:GetObject` permission fails the run instead.
+- **An unparseable `postedAt` is dropped, not kept.** A posting whose date cannot be read can never age out, so it would pin itself in the pool forever.
+
+`meta.fetchedThisRun` against `meta.carriedOver` is what makes a thin run visible: a run that adds little is normal overnight, but a pool that *shrinks* sharply is not.
+
+`meta.hitPageCap` coming back `true` is now expected on daytime runs rather than a fault — raising `JOBS_MAX_PAGES` buys a little more per fetch, but retention is what determines coverage.
 
 Enable model access once per account, in the Bedrock console under **Model access**, for `anthropic.claude-haiku-4-5-20251001-v1:0` and `amazon.titan-embed-text-v2:0`.
 
