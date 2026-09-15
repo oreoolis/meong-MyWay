@@ -57,19 +57,44 @@ export type JobPosting = {
 };
 
 export type JobsSnapshot = {
-  schemaVersion: 1;
-  /** ISO-8601 UTC — when this run finished. */
+  /**
+   * 1 = `jobs` is one fetch. 2 = `jobs` is the accumulated pool.
+   *
+   * The per-posting shape is identical across both; what changed is what the
+   * collection represents. Version 1 snapshots held whatever a single run
+   * happened to see, which made the pool a function of the hour the Lambda
+   * fired — measured at 1,710 postings for a daytime run against 227 for the
+   * overnight one, the latter with no software vacancies in it at all.
+   */
+  schemaVersion: 1 | 2;
+  /** ISO-8601 UTC — when the most recent run finished. */
   fetchedAt: string;
-  /** What "recent" meant for this run, in seconds. */
+  /** What "recent" meant for one fetch, in seconds. See `hitPageCap`. */
   windowSeconds: number;
   source: "mycareersfuture";
   meta: {
     pagesFetched: number;
+    /** Postings in the snapshot — from version 2, the whole pool. */
     jobCount: number;
-    /** ISO-8601 UTC — postings older than this were excluded. */
+    /** ISO-8601 UTC — postings older than this were excluded from the fetch. */
     cutoff: string;
-    /** True if paging stopped at `maxPages` rather than at the cutoff. */
+    /**
+     * True if paging stopped at `maxPages` rather than at the cutoff.
+     *
+     * Measured true on every daytime run: MCF serves a full page every time,
+     * so `windowSeconds` is never actually reached and one fetch sees five or
+     * six hours rather than a day. This is why the pool exists.
+     */
     hitPageCap: boolean;
+    /** Version 2: postings this run fetched, before merging into the pool. */
+    fetchedThisRun?: number;
+    /** Version 2: postings in the pool that this run did not re-fetch. */
+    carriedOver?: number;
+    /** Version 2: how long a posting stays in the pool, in days. */
+    retentionDays?: number;
+    /** Version 2: ISO-8601 UTC of the oldest posting still held. */
+    oldestPostedAt?: string | null;
   };
+  /** Newest posting first, from version 2 onward. */
   jobs: JobPosting[];
 };

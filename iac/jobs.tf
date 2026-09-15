@@ -81,10 +81,16 @@ resource "aws_iam_role" "jobs_scraper" {
 data "aws_iam_policy_document" "jobs_scraper" {
   count = local.jobs_enabled ? 1 : 0
 
-  # Write the snapshot. Scoped to this bucket's object space alone — the
-  # function has no reason to touch anything else in the account.
+  # Read the pool, then write it back. Scoped to this bucket's object space
+  # alone — the function has no reason to touch anything else in the account.
+  #
+  # `GetObject` is what makes the pool accumulate rather than being replaced by
+  # whatever one run saw. Without it the handler cannot read `latest.json`, and
+  # it deliberately raises rather than falling back to an empty pool, so a
+  # missing permission fails the run loudly instead of quietly publishing a
+  # single fetch over a week of postings.
   statement {
-    actions   = ["s3:PutObject"]
+    actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.jobs[0].arn}/*"]
   }
 
@@ -123,10 +129,12 @@ resource "aws_lambda_function" "jobs_scraper" {
   filename         = data.archive_file.jobs_scraper[0].output_path
   source_code_hash = data.archive_file.jobs_scraper[0].output_base64sha256
 
-  # A handful of paced pages against a public API; 60s leaves headroom
-  # without approaching the 15-minute ceiling.
-  timeout     = 60
-  memory_size = 256
+  # Twenty paced pages against a public API, plus reading and rewriting a pool
+  # that a week of postings takes to roughly 10 MB. Raised from 60s/256MB when
+  # the pool replaced the single-fetch snapshot: the extra work is one GET, one
+  # merge over tens of thousands of objects, and two larger PUTs.
+  timeout     = 120
+  memory_size = 512
 
   environment {
     variables = {
@@ -135,6 +143,12 @@ resource "aws_lambda_function" "jobs_scraper" {
       JOBS_WINDOW_SECONDS = "86400"
       JOBS_PAGE_LIMIT     = "100"
       JOBS_MAX_PAGES      = "20"
+      # The window the app actually matches against. `JOBS_WINDOW_SECONDS`
+      # above bounds one fetch and is never reached — MCF serves a full page
+      # every time, so a run exits on the page cap after five or six hours of
+      # postings. This is the number that decides how much of the market a
+      # candidate is compared to.
+      JOBS_RETENTION_DAYS = "7"
     }
   }
 
