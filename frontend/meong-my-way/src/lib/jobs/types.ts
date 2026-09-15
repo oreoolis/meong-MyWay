@@ -29,6 +29,23 @@ export type JobPosting = {
   /** Only the postings's key skills — see `handler.js`'s `mapJob`. */
   skills: string[];
   /**
+   * The employer's own tags for the nature of the work.
+   *
+   * "Information Technology", "Engineering", "Sales / Retail" — the closest
+   * thing the feed has to a declared discipline, and the only field that can
+   * settle a title a lexical matcher cannot read ("Associate Systems
+   * Engineer" is infrastructure or industrial depending on nothing in its
+   * title).
+   *
+   * Employer-entered and freely over-tagged, so it is used as a rescue signal
+   * and never as a filter — see `categoryAssist` in `matching.ts`.
+   *
+   * Optional only for the transition: every snapshot the current scraper
+   * writes has it, and one written before this field existed does not. Absent
+   * and empty mean the same thing to the matcher — no hint either way.
+   */
+  categories?: string[];
+  /**
    * Singapore Standard Occupational Classification code.
    *
    * Same taxonomy family as the SSG Skills Framework in `lib/ssg/client.ts`.

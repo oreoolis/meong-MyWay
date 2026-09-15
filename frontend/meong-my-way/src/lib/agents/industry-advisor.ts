@@ -2,11 +2,16 @@ import "server-only";
 
 import type {
   EvidenceBasis,
+  GapSeverity,
   IndustryAdvice,
   MatchedRole,
   ResumeProfile,
+  SkillGap,
 } from "@/lib/contracts";
 import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+
+import { splitSkills } from "@/lib/jobs/matching";
+import { affirmedSkillNames } from "@/lib/resume/questionnaire";
 
 import { jobRoleDigest, profileDigest } from "./digest";
 import { findRoles, lookupCompetencies, scoreRoles, type ScoredRole } from "./role-matching";
@@ -38,6 +43,7 @@ Rules:
 - Only discuss roles from the provided list. Refer to each by its exact [id].
 - Never state a salary. The application fills those in from the framework.
 - "advice" is about this candidate specifically. Generic career tips are worthless here.
+- A gap is something the resume does not evidence. Never list a skill the resume already shows — telling someone to learn what they already do destroys their trust in everything else on the page.
 - Reply with a single JSON object and nothing else. No prose, no markdown fences.`;
 
 const REASONED_SYSTEM = `You are a senior career advisor in Singapore, advising a professional on their standing inside their own industry.
@@ -48,6 +54,7 @@ Rules:
 - Name real job titles that exist in this sector in Singapore, at the seniority this resume supports.
 - Ground every judgement in what the resume evidences. Quote the experience that supports each match.
 - "advice" is about this candidate specifically. Generic career tips are worthless here.
+- A gap is something the resume does not evidence. Never list a skill the resume already shows — telling someone to learn what they already do destroys their trust in everything else on the page.
 - Never state a salary. Salary is not part of your reply.
 - Reply with a single JSON object and nothing else. No prose, no markdown fences.`;
 
@@ -76,7 +83,12 @@ Reply with JSON matching exactly this shape:
 {
   "sector": string,
   "positioning": string,
-  "matchedRoles": [{ "id": string, "rationale": string }],
+  "matchedRoles": [{
+    "id": string,
+    "rationale": string,
+    "strengths": [string],
+    "gaps": [{ "skill": string, "severity": "critical" | "serious" | "moderate", "remedy": string }]
+  }],
   "skillsInDemand": [string],
   "advice": [string]
 }
@@ -84,6 +96,8 @@ Reply with JSON matching exactly this shape:
 Guidance:
 - "positioning": 2-3 sentences on where this candidate currently stands in this sector — seniority, and what differentiates them.
 - "matchedRoles": the 3-5 strongest from the list, best first. "id" must be an [id] shown above. "rationale" is one sentence on why their experience fits.
+- "strengths": 2-3 things this resume already evidences that this specific role needs. Name the skill or the experience, not a compliment.
+- "gaps": 2-4 things this specific role needs that this resume does not evidence, hardest-blocking first. This is the answer to "why is my match score not higher, and what do I do about it" — so "remedy" must be one concrete action with a named target (a certification, a kind of project, a tool to ship something real with, a number to put on the resume), never "gain more experience". "severity" is how much it blocks this move today: "critical" stops an application, "moderate" is a nice-to-have.
 - "skillsInDemand": competencies this sector expects that the resume does not evidence.
 - "advice": 3-5 specific, actionable steps for progressing inside this sector.`;
 }
@@ -106,7 +120,13 @@ Reply with JSON matching exactly this shape:
 {
   "sector": string,
   "positioning": string,
-  "matchedRoles": [{ "title": string, "matchScore": number, "rationale": string }],
+  "matchedRoles": [{
+    "title": string,
+    "matchScore": number,
+    "rationale": string,
+    "strengths": [string],
+    "gaps": [{ "skill": string, "severity": "critical" | "serious" | "moderate", "remedy": string }]
+  }],
   "skillsInDemand": [string],
   "advice": [string]
 }
@@ -114,6 +134,8 @@ Reply with JSON matching exactly this shape:
 Guidance:
 - "positioning": 2-3 sentences on where this candidate currently stands in this sector — seniority, and what differentiates them.
 - "matchedRoles": 3-5 real job titles in this sector they could hold, best first. "matchScore" is 0-100, your judgement of fit. "rationale" is one sentence naming the experience that supports it.
+- "strengths": 2-3 things this resume already evidences that this specific role needs. Name the skill or the experience, not a compliment.
+- "gaps": 2-4 things this specific role needs that this resume does not evidence, hardest-blocking first. This is the answer to "why is my match score not higher, and what do I do about it" — so "remedy" must be one concrete action with a named target (a certification, a kind of project, a tool to ship something real with, a number to put on the resume), never "gain more experience". "severity" is how much it blocks this move today: "critical" stops an application, "moderate" is a nice-to-have.
 - "skillsInDemand": competencies this sector expects that the resume does not evidence.
 - "advice": 3-5 specific, actionable steps for progressing inside this sector.`;
 }
@@ -121,10 +143,117 @@ Guidance:
 type AdvisorPayload = {
   sector?: string;
   positioning?: string;
-  matchedRoles?: { id?: string; title?: string; matchScore?: number; rationale?: string }[];
+  matchedRoles?: {
+    id?: string;
+    title?: string;
+    matchScore?: number;
+    rationale?: string;
+    /** Validated in `cleanStrengths` / `groundGaps`, never trusted as typed. */
+    strengths?: unknown;
+    gaps?: unknown;
+  }[];
   skillsInDemand?: string[];
   advice?: string[];
 };
+
+/* -------------------------------------------------------------------------
+ * Per-role strengths and gaps
+ *
+ * What turns the match meter from a number into something a person can act on.
+ * The model names these because nothing else can — the Skills Framework role
+ * record carries a title, a sector and a description, but no skills list, so
+ * there is no set arithmetic to do here the way there is for a job posting's
+ * key skills in `jobs/matching.ts`.
+ *
+ * What is not left to the model is whether a gap is real. Every skill it names
+ * is checked against what the resume actually evidences, with the questionnaire
+ * already applied, and anything the candidate has is dropped. A gap list that
+ * tells someone to learn what they already do is worse than no gap list.
+ * ---------------------------------------------------------------------- */
+
+const GAP_SEVERITIES = new Set<string>(["critical", "serious", "moderate"]);
+
+/** Enough to act on. More than this is a backlog, not advice. */
+const MAX_ROLE_GAPS = 4;
+const MAX_ROLE_STRENGTHS = 3;
+
+function cleanStrengths(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const text = item.trim();
+    if (!text) continue;
+
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    out.push(text);
+    if (out.length === MAX_ROLE_STRENGTHS) break;
+  }
+
+  return out;
+}
+
+/**
+ * Validate the model's gaps, then drop any the resume already answers.
+ *
+ * `splitSkills` is the same comparison the job-opening gap uses, so "Team
+ * Leadership" against a resume that says "Leadership" counts as covered in
+ * both places rather than being a gap here and not there.
+ */
+function groundGaps(raw: unknown, resumeSkills: string[]): SkillGap[] {
+  if (!Array.isArray(raw)) return [];
+
+  const gaps: SkillGap[] = [];
+  const seen = new Set<string>();
+
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const { skill, severity, remedy } = item as Record<string, unknown>;
+    if (typeof skill !== "string" || typeof remedy !== "string") continue;
+
+    const name = skill.trim();
+    const action = remedy.trim();
+    if (!name || !action) continue;
+
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    gaps.push({
+      skill: name,
+      // An unrecognised severity becomes the mildest one rather than being
+      // dropped: the advice is still worth showing, and overstating urgency
+      // on a guess is the worse error.
+      severity:
+        typeof severity === "string" && GAP_SEVERITIES.has(severity)
+          ? (severity as GapSeverity)
+          : "moderate",
+      remedy: action,
+    });
+
+    // Deliberately not capped at MAX_ROLE_GAPS here. Grounding runs first, and
+    // capping before it means four gaps the resume already answers crowd out
+    // four real ones — leaving the disclosure empty while genuine advice was
+    // thrown away. The bound below is only a guard on model output length.
+    if (gaps.length === MAX_ROLE_GAPS * 3) break;
+  }
+
+  if (gaps.length === 0) return gaps;
+
+  const { missing } = splitSkills(
+    gaps.map((gap) => gap.skill),
+    resumeSkills,
+  );
+  const unmet = new Set(missing);
+
+  return gaps.filter((gap) => unmet.has(gap.skill)).slice(0, MAX_ROLE_GAPS);
+}
 
 export type AdviceResult = {
   advice: IndustryAdvice;
@@ -187,8 +316,12 @@ async function groundedAdvice(
         }
       : null;
 
+  // The questionnaire-corrected list, so a skill the candidate answered they
+  // have never used is not treated as covering a gap for this role.
+  const resumeSkills = affirmedSkillNames(profile);
+
   const matchedRoles: MatchedRole[] = (value.matchedRoles ?? [])
-    .map((raw) => {
+    .map((raw): MatchedRole | null => {
       const entry = raw.id ? byId.get(raw.id.trim()) : undefined;
       if (!entry) return null;
 
@@ -199,7 +332,9 @@ async function groundedAdvice(
         matchScore: entry.score,
         salary: toSalary(entry),
         rationale: raw.rationale?.trim() ?? "",
-      } satisfies MatchedRole;
+        strengths: cleanStrengths(raw.strengths),
+        gaps: groundGaps(raw.gaps, resumeSkills),
+      };
     })
     .filter((role): role is MatchedRole => role !== null);
 
@@ -246,6 +381,8 @@ async function reasonedAdvice(
     maxTokens: 2048,
   });
 
+  const resumeSkills = affirmedSkillNames(profile);
+
   const matchedRoles: MatchedRole[] = (value.matchedRoles ?? [])
     .map((raw, index): MatchedRole | null => {
       const title = raw.title?.trim();
@@ -260,6 +397,8 @@ async function reasonedAdvice(
         matchScore: Number.isFinite(score) ? Math.min(100, Math.max(0, score)) : 0,
         salary: null,
         rationale: raw.rationale?.trim() ?? "",
+        strengths: cleanStrengths(raw.strengths),
+        gaps: groundGaps(raw.gaps, resumeSkills),
       };
     })
     .filter((role): role is MatchedRole => role !== null);

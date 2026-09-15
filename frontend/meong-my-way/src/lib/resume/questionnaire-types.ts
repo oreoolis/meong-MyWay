@@ -40,6 +40,15 @@ export type QuestionnaireEvidence = QuestionnaireSelection & {
   question?: string;
   /** The exact canonical option label selected by the candidate. */
   answer?: string;
+  /**
+   * The skill name or role the question was built around, verbatim.
+   *
+   * Carried so that a consumer deciding what a disclaiming answer refutes can
+   * compare identities instead of searching the prose for a substring — which
+   * is how "I have never used JavaScript" came to strip Java as well.
+   * Optional only because evidence stored before it existed has none.
+   */
+  reference?: string;
   statement: string;
   category?: EvidenceCategory;
 };
