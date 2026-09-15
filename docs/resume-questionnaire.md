@@ -1,22 +1,22 @@
 # Post-upload résumé questionnaire
 
-The flow is upload → parse → optional questions → final evidence embedding → planner and specialists → results → deferred swapper.
+The flow is upload → parse → questionnaire → final evidence embedding → planner and specialists → results → deferred swapper.
 
 ## Contracts and evidence
 
-The flow is **Resume Parser → parsed profile → Context Agent → optional questions → user answers or skip → Resume Parser (final embedding only) → Career Planner → specialists**. The document is parsed once.
+The flow is **Resume Parser → parsed profile → Questionnaire Agent → two to three questions → user answers or skip → Resume Parser (profile refinement and final embedding) → Career Planner → specialists**. The document is parsed once.
 
-`generateResumeContext(profile)` in `src/lib/agents/resume-context.ts` owns the two Bedrock calls (`context` and `context-review`). Its only input is the parsed profile; its output is reviewed questions plus token usage. It depends on Bedrock reasoning and canonical question templates, not storage, user submissions, retrieval or embeddings. Intake persists the questions and resolves submitted IDs; `embedParsedResume` combines the base text with that resolved evidence.
+`generateResumeContext(profile)` in `src/lib/agents/resume-context.ts` owns the two Bedrock calls (`context` and `context-review`). Its only input is the parsed profile; its output is two or three reviewed questions plus token usage. It depends on Bedrock reasoning and canonical question templates, not storage, user submissions, retrieval or embeddings. The reviewer may remove weak candidates only while two remain; if its response omits too many IDs, the server retains the best generated candidates. If generation itself cannot produce two valid candidates, intake returns a retryable error.
 
 Both loading pages share the seven-station diagram: store, parser extraction, Context Agent, user, parser embedding, planner, specialists. The Context Agent and completion endpoints optionally stream NDJSON phases when requested. The browser follows server phase events rather than timers. Downstream cards stay gray until embedding completes; Career Swapper remains deferred to results.
 
-`POST /api/analysis/intake` accepts `{ resumeId }`. Verified Cognito authentication determines the user. The server reads that user's current stored document, parses without embedding, and persists its profile and base evidence text. Successful generation returns two or three optional questions. A generation error or fewer than two approved questions returns an empty questionnaire; the browser automatically continues with résumé-only analysis.
+`POST /api/analysis/intake` accepts `{ resumeId }`. Verified Cognito authentication determines the user. The server reads that user's current stored document, parses without embedding, and persists its profile and base evidence text. Successful generation returns two or three optional questions. Generation failures and fewer than two valid generated candidates return a retryable error. Retries reuse the parsed checkpoint, and generation-version changes invalidate older cached questionnaires without reparsing the document.
 
-`POST /api/analysis` now requires `{ intakeId, resumeId, version: 1, selections: [{ questionId, optionId }] }`. It rejects client evidence, labels, profile fields, preferences and user IDs, as well as unknown, duplicate, mismatched and stale selections. Empty selections and skip options add no evidence. A factual “never used” answer remains distinct from an unanswered question.
+`POST /api/analysis` now requires `{ intakeId, resumeId, version: 1, selections: [{ questionId, optionId }] }`. It rejects client evidence, labels, profile fields, preferences and user IDs, as well as unknown, duplicate, mismatched and stale selections. Empty selections add no evidence. A factual “never used” answer remains distinct from an unanswered question.
 
-The model identifies gaps by source index and facet; it cannot supply executable option prose. Canonical server templates cover hands-on responsibility, recency, usage context and coordination scope. Each provides four substantive choices plus the standard “Not applicable / Prefer not to answer” option. Calendar intervals and scope boundaries are disjoint. Invalid selectors, duplicate source anchors and already-demonstrated proficiency are dropped. A second model call reviews the rendered questions against the entire profile to reject established facts, redundant gaps, assumptions and aspirational skill claims. Fewer than two survivors means no questionnaire.
+The model identifies gaps by source index and facet; it cannot supply executable option prose. Canonical server templates cover hands-on responsibility, recency, usage context and coordination scope. Each provides four substantive choices; the UI's “Leave unanswered” control handles per-question opt-out. Calendar intervals and scope boundaries are disjoint. Invalid selectors and duplicate source anchors are dropped. A second model call ranks the rendered questions against the entire profile and may reject established facts, redundant gaps, assumptions and aspirational skill claims while preserving the two-question minimum.
 
-The parser excludes preferences and desired roles from embedding text. Selected responses stay under `questionnaireEvidence`, with the exact question, selected answer, source, and question/option IDs; original résumé-derived fields remain intact. The final vector embeds the base text plus selected factual statements once each. There are no score bonuses or inferred services/tools. Empty evidence preserves the base text exactly. All downstream agents receive the validated question-and-answer pairs in a separate self-reported section of their profile digest; the advisor and deferred swapper also use the same enriched vector. Specialist partial failures retain the existing `Promise.allSettled` behavior.
+The parser excludes preferences and desired roles from embedding text. After submission, a constrained Resume Parser prompt refines the derived profile summary and semantic-search narrative using only the parsed résumé and validated answers. Selected responses stay under `questionnaireEvidence`, with the exact question, selected answer, source, and question/option IDs; résumé-derived skills, roles, employers, dates, education and certifications remain intact. Any factual statement omitted by the refinement is appended before embedding. There are no score bonuses or inferred services/tools. Empty evidence skips refinement and preserves the base text exactly. All downstream agents receive the refined summary and validated question-and-answer pairs in a separate self-reported section of their profile digest; the advisor and deferred swapper also use the same enriched vector. Specialist partial failures retain the existing `Promise.allSettled` behavior.
 
 ## Persistence and deployment
 
@@ -34,7 +34,7 @@ The dedicated context stage has native labelled radio groups, visible keyboard f
 
 Validation at implementation time:
 
-- 94 unit tests passed, including the existing suite and normalization, ID validation, provenance, authentication, stale versions, expiry, transaction guards, retries, cancellation, fallback, specialist failures and deferred-vector handoff.
+- Unit coverage includes normalization, the two-question minimum, ID validation, provenance, authentication, stale versions, expiry, transaction guards, retries, cancellation, specialist failures and deferred-vector handoff.
 - TypeScript `--noEmit` and the production build passed.
 - ESLint passed with two pre-existing unused-code warnings in the analysis stage.
 - Two live AWS tests passed: synthetic upload/intake/completion/replay/deferred-swap/replacement, and a fixed-fixture Titan ranking evaluation. Test records were deleted afterward.
@@ -70,7 +70,7 @@ This is one fixture, not population-wide ranking validation. Broader labelled r�
 Paths below are relative to `frontend/meong-my-way` unless noted.
 
 - `src/lib/resume/questionnaire-types.ts`, `questionnaire.ts`: contracts, canonical question templates, ID validation and enrichment.
-- `src/lib/agents/resume-context.ts`: Context Agent gap selection, review and fallback.
+- `src/lib/agents/resume-context.ts`: Questionnaire Agent gap selection, review and minimum-count validation.
 - `src/lib/resume/intake.ts`, `intake-store.ts`: intake orchestration, locking, completion and replay.
 - `src/lib/agents/resume-parser.ts`, `digest.ts`, `orchestrator.ts`, `store.ts`, `src/lib/contracts.ts`: split parsing/embedding, provenance, downstream handoff and persistence.
 - `src/app/api/analysis/intake/route.ts`, `src/app/api/analysis/route.ts`, `src/app/api/resume/route.ts`, `src/lib/resume/store.ts`: authenticated endpoints and invalidation.

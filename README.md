@@ -131,9 +131,9 @@ graph TD
 
     subgraph agents["🤖 Six Bedrock Agents"]
         parser["1 · Resume Parser"]
-        context["2 · Context Agent"]
+        context["2 · Questionnaire Agent"]
         answers["User answers or skip"]
-        embedding["1 · Resume Parser: final embedding"]
+        embedding["1 · Resume Parser: refine profile + embed"]
         planner["3 · Career Planner"]
         improver["4 · Resume Improver"]
         advisor["5 · Industry Advisor"]
@@ -312,7 +312,7 @@ sequenceDiagram
     Bedrock-->>IntakeAPI: Structured profile + base evidence text
     IntakeAPI->>DDB_A: Persist versioned intake, bound to exact resumeId
     IntakeAPI->>Bedrock: Select meaningful gaps and review canonical MCQs
-    IntakeAPI->>DDB_A: Persist 2–3 questions, or empty fallback
+    IntakeAPI->>DDB_A: Persist 2–3 reviewed questions or return an error
     IntakeAPI-->>FE: Profile + questionnaire (IDs and labels)
     FE-->>User: Optional questionnaire
     User->>FE: Select factual answers, leave unanswered, or skip
@@ -380,8 +380,8 @@ sequenceDiagram
 
 | # | Agent | File | Reads | Produces |
 |---|-------|------|-------|----------|
-| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes (Bedrock document block) | Parsed profile at intake; final Titan embedding after questionnaire submission |
-| 2 | Context Agent | `lib/agents/resume-context.ts` | Parsed profile | Reviewed optional questions and token usage |
+| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes, then validated questionnaire answers | Parsed profile at intake; refined summary and final Titan embedding after questionnaire submission |
+| 2 | Questionnaire Agent | `lib/agents/resume-context.ts` | Parsed profile | Two to three reviewed questions and token usage |
 | 3 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan`: current trajectory and ranked paths |
 | 4 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | Quoted, line-level rewrites with impact ratings |
 | 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
