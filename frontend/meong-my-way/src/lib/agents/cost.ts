@@ -77,3 +77,8 @@ export function estimateCost(
     estimatedUsd: Number(usd.toFixed(6)),
   };
 }
+
+/** Price a conversational model call against the same maintained rate table. */
+export function estimateChatCost(usage: ModelUsage): number {
+  return estimateCost(usage, 0).estimatedUsd;
+}

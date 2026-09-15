@@ -137,6 +137,7 @@ data "aws_iam_policy_document" "agent_runtime" {
       "dynamodb:GetItem",
       "dynamodb:ConditionCheckItem",
       "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
       "dynamodb:Query",
       "dynamodb:BatchWriteItem",
       "dynamodb:DeleteItem",

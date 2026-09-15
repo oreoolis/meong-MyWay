@@ -25,7 +25,7 @@ import type { CareerCoach } from "@/lib/contracts";
  * strength of an automated résumé read is not a judgement this app has
  * grounds to make.
  */
-export const CAREER_COACHES: CareerCoach[] = [
+export const CAREER_COACHES = [
   {
     id: "wsg-careers-connect",
     organisation: "Workforce Singapore (WSG)",
@@ -36,6 +36,14 @@ export const CAREER_COACHES: CareerCoach[] = [
     bestFor:
       "A structured switch where you want the funded programmes surfaced alongside the advice.",
     cost: "Free for Singapore citizens and PRs",
+    pros: [
+      "Structured one-to-one guidance for planning a career switch.",
+      "Can connect eligible users with placement, reskilling and training-allowance programmes.",
+    ],
+    cons: [
+      "Less sector-specific than a service built around direct employer relationships.",
+      "Free coaching is aimed at Singapore citizens and permanent residents.",
+    ],
   },
   {
     id: "e2i",
@@ -47,6 +55,14 @@ export const CAREER_COACHES: CareerCoach[] = [
     bestFor:
       "Testing whether a target sector is actually hiring people with your background right now.",
     cost: "Free; some programmes are union-member priority",
+    pros: [
+      "Strong employer relationships make conversations concrete about current hiring demand.",
+      "Useful for testing whether a target sector will value the user's existing background.",
+    ],
+    cons: [
+      "Some programmes give priority to union members.",
+      "Less focused on comparing credentials and training subsidies than SkillsFuture Advice.",
+    ],
   },
   {
     id: "skillsfuture-advice",
@@ -58,6 +74,14 @@ export const CAREER_COACHES: CareerCoach[] = [
     bestFor:
       "Working out which credential is worth the time, and what it will actually cost you after subsidy.",
     cost: "Free; training subsidies apply separately",
+    pros: [
+      "Strongest option for comparing credentials, conversion programmes and training subsidies.",
+      "Short guided sessions suit users validating a mid-career retraining plan.",
+    ],
+    cons: [
+      "Less focused on direct employer matching than e2i.",
+      "Course fees and subsidy eligibility still need to be checked separately.",
+    ],
   },
   {
     id: "myskillsfuture",
@@ -68,5 +92,13 @@ export const CAREER_COACHES: CareerCoach[] = [
     url: "https://www.myskillsfuture.gov.sg/content/portal/en/index.html",
     bestFor: "Preparing for a session, or self-serving if you would rather not book one.",
     cost: "Free",
+    pros: [
+      "Self-service access to courses aligned with Skills Framework job roles.",
+      "Useful for preparing specific options before speaking with a coach, without booking first.",
+    ],
+    cons: [
+      "It is a planning portal, not a human coaching service.",
+      "Users must compare course options and apply them to their own situation themselves.",
+    ],
   },
-];
+] satisfies Array<CareerCoach & { pros: string[]; cons: string[] }>;
