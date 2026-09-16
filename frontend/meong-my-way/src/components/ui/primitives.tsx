@@ -193,6 +193,17 @@ export function ProgressBar({
   hint,
   /** Overlay a travelling highlight, to show liveness between value changes. */
   active = false,
+  /**
+   * Print the percentage beside the hint.
+   *
+   * Off is for bars whose `value` is a projection rather than a measurement —
+   * the estimated curve in `use-estimated-progress` is the shape of a wait, not
+   * a count of finished work, and a number reads as the latter. The bar and the
+   * hint still say how far along and how long it usually takes; only the false
+   * precision goes. `aria-valuenow` is unaffected, so assistive tech keeps the
+   * same reading either way.
+   */
+  showValue = true,
   size = "md",
   className,
 }: {
@@ -203,6 +214,7 @@ export function ProgressBar({
   /** Short status line shown beside the percentage. */
   hint?: string;
   active?: boolean;
+  showValue?: boolean;
   size?: "md" | "sm";
   className?: string;
 }) {
@@ -220,14 +232,16 @@ export function ProgressBar({
           >
             {hint}
           </span>
-          <span
-            className={cn(
-              "font-medium tabular-nums text-ink-muted",
-              size === "md" ? "text-[12px]" : "text-[11.5px]",
-            )}
-          >
-            {Math.round(clamped)}%
-          </span>
+          {showValue ? (
+            <span
+              className={cn(
+                "font-medium tabular-nums text-ink-muted",
+                size === "md" ? "text-[12px]" : "text-[11.5px]",
+              )}
+            >
+              {Math.round(clamped)}%
+            </span>
+          ) : null}
         </div>
       ) : null}
 

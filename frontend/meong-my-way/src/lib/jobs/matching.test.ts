@@ -479,6 +479,55 @@ describe("splitSkills", () => {
     expect(matched).toEqual([]);
     expect(missing).toEqual(["SQL", "Python"]);
   });
+
+  /**
+   * The reported bug: a résumé skills-section entry claiming a whole family.
+   *
+   * These four ran as `matched: [...everything], missing: []` before the
+   * generic-head rule — and an empty `missing` is what silently removes the
+   * skill from `summariseGap`'s "what to learn first".
+   */
+  it("does not let a bare discipline word claim the skills built on it", () => {
+    const engineering = splitSkills(
+      ["Civil Engineering", "Chemical Engineering"],
+      ["Engineering"],
+    );
+    expect(engineering.matched).toEqual([]);
+    expect(engineering.missing).toEqual(["Civil Engineering", "Chemical Engineering"]);
+
+    const management = splitSkills(
+      ["Contract Management", "Warehouse Management"],
+      ["Management"],
+    );
+    expect(management.matched).toEqual([]);
+
+    const development = splitSkills(["Business Development"], ["Development"]);
+    expect(development.matched).toEqual([]);
+
+    const administration = splitSkills(["Office Administration"], ["Administration"]);
+    expect(administration.matched).toEqual([]);
+  });
+
+  it("still matches a terse résumé spelling of the same skill", () => {
+    // The other direction of the same subset rule, and the reason it exists.
+    // A generic-head list that also broke these would have traded one silent
+    // wrong answer for another.
+    expect(splitSkills(["Team Leadership"], ["Leadership"]).matched).toEqual([
+      "Team Leadership",
+    ]);
+    expect(splitSkills(["Microsoft Excel"], ["Excel"]).matched).toEqual([
+      "Microsoft Excel",
+    ]);
+    expect(splitSkills(["IT Project Management"], ["Project Management"]).matched).toEqual([
+      "IT Project Management",
+    ]);
+  });
+
+  it("matches a generic skill against itself", () => {
+    // The head rule gates *strict* subsets. Identical token sets are the same
+    // skill however generic the words are.
+    expect(splitSkills(["Management"], ["Management"]).matched).toEqual(["Management"]);
+  });
 });
 
 describe("summariseGap", () => {

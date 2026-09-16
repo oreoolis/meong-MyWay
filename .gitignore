@@ -22,8 +22,30 @@ iac/crash.log
 # is committed, the zip is not.
 lambda/jobs-scraper/jobs-scraper.zip
 
-# Remove all docs and reasoning
+# Remove all docs and reasoning.
+#
+# `docs/*` excludes the subdirectories themselves, and git does not descend into
+# an excluded directory — so a file added under `docs/` after this rule landed is
+# silently untracked, however specific a later negation is. That is not
+# theoretical: it is why README.md's architecture diagram 404'd on GitHub while
+# rendering perfectly in a local preview, and why ADR-0002 was unreachable from
+# the two places the README links it. Files tracked before the rule (ADR-0001,
+# the other diagrams) were unaffected, which is what made the gap look arbitrary.
+#
+# So anything README.md points at has to be re-included explicitly, and the
+# directory has to be re-included before the file inside it can be. Add the
+# parent-dir pair as well as the file when publishing a new doc asset.
 docs/*
+!docs/architecture.excalidraw
+
+!docs/adr/
+docs/adr/*
+!docs/adr/0002-claude-haiku-for-grounded-advice.md
+
+!docs/img/
+docs/img/*
+!docs/img/architecture-excalidraw.svg
+
 docs/auth
 CLAUDE.md
 skills-lock.json
