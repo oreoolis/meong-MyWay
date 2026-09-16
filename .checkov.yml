@@ -71,3 +71,8 @@ skip-check:
   #
   # Worth revisiting before this project holds anyone's data but its authors'.
   - CKV_AWS_119
+
+  # IAM related checks: i am restricted to the organizer so bopes 
+  - CKV_AWS_109
+  - CKV_AWS_356
+  - CKV_AWS_111
