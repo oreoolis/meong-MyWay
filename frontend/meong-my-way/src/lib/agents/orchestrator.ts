@@ -1,7 +1,8 @@
 import "server-only";
 
-import type { AnalysisBundle, CareerSwap, RunCost } from "@/lib/contracts";
+import type { AnalysisBundle, CareerPath, CareerSwap, RunCost } from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
+import { withRecommendedCourses } from "@/lib/courses/recommendations";
 import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
 import { getResume, readResumeBytes } from "@/lib/resume/store";
 import type { StoredResume } from "@/lib/resume/types";
@@ -82,6 +83,30 @@ function sumUsage(entries: (ModelUsage | undefined)[]): ModelUsage {
     }),
     { inputTokens: 0, outputTokens: 0 },
   );
+}
+
+/** Courses enrich a plan but never decide whether the plan can be returned. */
+async function attachCourseRecommendations(paths: CareerPath[]): Promise<CareerPath[]> {
+  try {
+    return await withRecommendedCourses(paths);
+  } catch (error) {
+    console.error("[agents] could not attach SkillsFuture courses:", error);
+    return paths;
+  }
+}
+
+function mergePathAttachments(
+  pathsWithOpenings: CareerPath[],
+  pathsWithCourses: CareerPath[],
+): CareerPath[] {
+  const coursesById = new Map(
+    pathsWithCourses.map((path) => [path.id, path.courses] as const),
+  );
+
+  return pathsWithOpenings.map((path) => {
+    const courses = coursesById.get(path.id);
+    return courses?.length ? { ...path, courses } : path;
+  });
 }
 
 /**
@@ -215,8 +240,8 @@ export async function runAnalysis(
   // otherwise fail with the same cause and it reads as two unrelated problems.
   if (!hasSsgCredentials()) {
     console.warn(
-      "[agents] SSG_CLIENT_ID / SSG_CLIENT_SECRET are not set — the industry " +
-        "advisor and career swapper will be skipped. Get them from " +
+      "[agents] SSG_CLIENT_ID / SSG_CLIENT_SECRET are not set — SkillsFuture " +
+        "courses, the industry advisor and career swapper will be skipped. Get them from " +
         "https://developer.swda.gov.sg (Account > Dashboard > your app > Credentials).",
     );
   }
@@ -230,8 +255,17 @@ export async function runAnalysis(
   // front of them. Both are still awaited before this function returns.
   const planStored = (async () => {
     // Attached before the plan is stored, so the stored artifact and the
-    // returned bundle carry the same openings rather than diverging.
-    const plan = { ...planned.plan, paths: await attachOpenings(planned.plan.paths) };
+    // returned bundle carry the same openings and courses rather than
+    // diverging. The two external lookups are independent and run together.
+    const plannedPaths = planned.plan.paths ?? [];
+    const [pathsWithOpenings, pathsWithCourses] = await Promise.all([
+      attachOpenings(plannedPaths),
+      attachCourseRecommendations(plannedPaths),
+    ]);
+    const plan = {
+      ...planned.plan,
+      paths: mergePathAttachments(pathsWithOpenings, pathsWithCourses),
+    };
 
     await Promise.all([
       putAnalysisArtifact({
@@ -393,15 +427,26 @@ export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
 
   if (!result) return null;
 
-  const swap: CareerSwap = matcher
-    ? {
-        ...result.swap,
-        destinations: withOpenings(
-          result.swap.destinations,
-          await matcher.openingsFor(result.swap.destinations),
-        ),
-      }
-    : result.swap;
+  const [destinationsWithOpenings, destinationsWithCourses] = await Promise.all([
+    matcher
+      ? matcher
+          .openingsFor(result.swap.destinations)
+          .then((openings) => withOpenings(result.swap.destinations, openings))
+          .catch((error) => {
+            console.error("[agents] could not attach swap openings:", error);
+            return result.swap.destinations;
+          })
+      : Promise.resolve(result.swap.destinations),
+    attachCourseRecommendations(result.swap.destinations),
+  ]);
+
+  const swap: CareerSwap = {
+    ...result.swap,
+    destinations: mergePathAttachments(
+      destinationsWithOpenings,
+      destinationsWithCourses,
+    ),
+  };
 
   await storeArtifact({
     userId,

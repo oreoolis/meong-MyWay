@@ -137,11 +137,15 @@ function baseUrl(): string {
   );
 }
 
-async function authHeaders(version: string): Promise<Record<string, string>> {
+async function authHeaders(version?: string | null): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     Accept: "application/json",
-    "x-api-version": version,
   };
+
+  // The Skills Framework endpoints are pinned to explicit versions. The
+  // course directory currently rejects the old v1 header as expired and uses
+  // its current default when the header is omitted.
+  if (version) headers["x-api-version"] = version;
 
   const token = await getAccessToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -158,8 +162,9 @@ async function authHeaders(version: string): Promise<Record<string, string>> {
 async function request<T>(
   path: string,
   params: Record<string, string | number | undefined>,
-  version: string = API_VERSIONS.default,
+  version: string | null = API_VERSIONS.default,
   retryOnAuthFailure = true,
+  timeoutMs?: number,
 ): Promise<T> {
   const url = new URL(`${baseUrl()}${path}`);
   for (const [key, value] of Object.entries(params)) {
@@ -170,6 +175,7 @@ async function request<T>(
   try {
     response = await fetch(url, {
       headers: await authHeaders(version),
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
       // Reference data, and the same keywords recur across users — an hour of
       // caching removes most of the traffic without going stale in any way a
       // user would notice.
@@ -195,7 +201,7 @@ async function request<T>(
 
     if (retryOnAuthFailure) {
       invalidateAccessToken();
-      return request<T>(path, params, version, false);
+      return request<T>(path, params, version, false, timeoutMs);
     }
   }
 
@@ -441,6 +447,78 @@ export async function autocompleteGenericSkills(
   );
 
   return data.codes ?? [];
+}
+
+/* -------------------------------------------------------------------------
+ * SkillsFuture course directory
+ * ---------------------------------------------------------------------- */
+
+export type SsgCourseSkill = {
+  title: string;
+  type?: string;
+};
+
+/**
+ * The useful subset of the much larger Retrieve Courses record.
+ *
+ * The endpoint repeats provider contact details, addresses, fee structures,
+ * course runs and analytics. Keeping those out of this contract prevents a
+ * recommendation feature from accidentally persisting personal contacts or
+ * presenting fee data whose subsidy context it cannot explain.
+ */
+export type SsgCourse = {
+  referenceNumber: string;
+  externalReferenceNumber?: string | null;
+  title: string;
+  objective?: string | null;
+  content?: string | null;
+  url?: string | null;
+  registrationUrl?: string | null;
+  trainingProviderAlias?: string | null;
+  trainingProvider?: { name?: string | null; websiteUrl?: string | null } | null;
+  status?: { code?: string; description?: string } | null;
+  uniqueSkills?: SsgCourseSkill[];
+};
+
+export type CourseSearch = {
+  keyword: string;
+  page?: number;
+  pageSize?: number;
+  /** Course enrichment is optional and must not hold up the core analysis. */
+  timeoutMs?: number;
+};
+
+/**
+ * Search the live SkillsFuture course directory.
+ *
+ * Unlike Skills Framework job-role search, this endpoint accepts phrases.
+ * The API performs keyword retrieval rather than semantic matching; callers
+ * should pool searches for several gaps and rank the returned course records.
+ */
+export async function searchCourses(
+  search: CourseSearch,
+): Promise<{ courses: SsgCourse[]; total: number }> {
+  const keyword = search.keyword.trim();
+  if (keyword.length < MIN_KEYWORD_LENGTH) return { courses: [], total: 0 };
+
+  const data = await request<{ courses?: SsgCourse[] }>(
+    "/courses/directory",
+    {
+      keyword,
+      page: search.page ?? 0,
+      pageSize: Math.min(search.pageSize ?? 20, 50),
+    },
+    // Sending the Skills Framework's v1 header makes the course service reply
+    // "Api Version has expired". Omitting it selects the current course API.
+    null,
+    true,
+    search.timeoutMs,
+  );
+
+  const courses = (data.courses ?? []).filter(
+    (course) => Boolean(course.referenceNumber?.trim() && course.title?.trim()),
+  );
+  return { courses, total: courses.length };
 }
 
 /* -------------------------------------------------------------------------

@@ -818,7 +818,7 @@ BEDROCK_REGION=us-east-1
 BEDROCK_REASONING_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
-# --- SkillsFuture (SSG-WSG) Skills Framework API ------------------------------
+# --- SkillsFuture (SSG-WSG) Skills Framework + Courses APIs -------------------
 SSG_CLIENT_ID=
 SSG_CLIENT_SECRET=
 ```
