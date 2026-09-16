@@ -1,0 +1,73 @@
+# Checkov configuration.
+#
+# Everything skipped here is a project-wide decision with a reason attached.
+# Checks that apply to one resource rather than to the whole project are NOT
+# listed here — they are inline `#checkov:skip=` comments next to the resource,
+# so the check keeps running everywhere else. Two exist today: CKV_AWS_145 on
+# the jobs bucket (iac/jobs.tf) and CKV_AWS_28 on the unused users table
+# (iac/dynamodb.tf).
+#
+# Checkov's default policy set is written for a regulated production estate.
+# This is a hackathon project with a $20 total budget, one bucket of personal
+# data and one of public data. Several of its defaults would cost real money to
+# satisfy and buy nothing here; one of them would make the product worse. Each
+# is argued below. Delete an entry rather than working around it if the project
+# ever grows into the assumption behind it.
+
+framework:
+  - terraform
+
+skip-check:
+  # Cross-region replication on both buckets.
+  #
+  # Replication doubles storage cost and adds a second region to operate, to
+  # protect against the loss of an entire AWS region. Résumés are re-uploadable
+  # by the person who owns them, and the jobs snapshot rebuilds itself within
+  # 12 hours on the next scheduled scrape. Neither justifies the spend.
+  - CKV_AWS_144
+
+  # S3 server access logging on both buckets.
+  #
+  # Needs a third bucket to receive the logs, which then needs its own
+  # lifecycle policy and its own encryption config, and which the rule itself
+  # says cannot use SSE-KMS. CloudTrail data events already cover the access
+  # question for the bucket that holds personal data.
+  - CKV_AWS_18
+
+  # S3 event notifications on both buckets.
+  #
+  # There is no consumer. Nothing in this project reacts to an object landing:
+  # the app writes and reads résumés synchronously inside a request, and the
+  # scraper writes the snapshot on a schedule. An SNS topic nothing subscribes
+  # to is not a security control.
+  - CKV2_AWS_62
+
+  # Lifecycle configuration on the uploads bucket.
+  #
+  # The bucket holds exactly one object per user, overwritten in place on
+  # re-upload — see the partition-key note in resumes.tf. There is no
+  # accumulating prefix to expire. The jobs bucket, which does accumulate, has
+  # a real lifecycle rule already.
+  - CKV2_AWS_61
+
+  # S3 versioning on both buckets.
+  #
+  # Declined on privacy grounds, not cost. Versioning on the uploads bucket
+  # would retain every superseded and deleted résumé as a noncurrent version,
+  # so a user deleting their document would not actually delete it. That is a
+  # worse outcome than the one the check is guarding against, and it is the
+  # opposite of what the app promises. The jobs bucket is a derived artifact
+  # rebuilt on a schedule and has nothing worth versioning.
+  - CKV_AWS_21
+
+  # Customer-managed KMS keys on the DynamoDB tables.
+  #
+  # DynamoDB encrypts every table at rest by default with an AWS-owned key, at
+  # no charge. A CMK per table is three more keys at ~$1/month each plus
+  # request charges, against a $20 budget. The uploads bucket got a CMK because
+  # it holds the résumé documents themselves; the tables hold derived
+  # artifacts — extracted profiles, embeddings, generated plans — behind the
+  # same account boundary.
+  #
+  # Worth revisiting before this project holds anyone's data but its authors'.
+  - CKV_AWS_119

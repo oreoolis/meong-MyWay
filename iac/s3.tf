@@ -26,6 +26,36 @@ resource "aws_kms_key" "uploads" {
   description             = "${var.project_name} résumé uploads (S3 SSE-KMS)"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = one(data.aws_iam_policy_document.uploads_kms[*].json)
+}
+
+# The AWS default key policy, written out.
+#
+# Omitting `policy` gets this exact document generated for you, which is why
+# leaving it out is not a security hole — but it is invisible, and an
+# unreviewable policy on the key guarding personal data is worth two dozen
+# lines. Checkov's CKV2_AWS_64 asks for the same thing.
+#
+# Delegating to the account root is deliberate, not lazy. It means IAM policies
+# govern who may decrypt, which is the only arrangement that keeps working for
+# both principals this project has: a developer's own keys locally, and a task
+# role in a deployed environment. A key policy that named those principals
+# directly would lock out whichever one it forgot — and locking yourself out of
+# a KMS key is not recoverable without AWS support.
+data "aws_iam_policy_document" "uploads_kms" {
+  count = var.enable_kms_encryption ? 1 : 0
+
+  statement {
+    sid       = "EnableIAMUserPermissions"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
 }
 
 resource "aws_kms_alias" "uploads" {

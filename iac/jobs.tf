@@ -23,6 +23,11 @@ locals {
 }
 
 resource "aws_s3_bucket" "jobs" {
+  # Scoped to this bucket rather than skipped project-wide, so the uploads
+  # bucket losing its CMK would still fail the build. Same argument as the
+  # Trivy AWS-0132 entry in .trivyignore.yaml: public data, SSE-S3 declared
+  # below deliberately.
+  #checkov:skip=CKV_AWS_145:Public job-postings snapshot; SSE-S3 is the deliberate choice, see the encryption block below.
   count  = local.jobs_enabled ? 1 : 0
   bucket = "${var.project_name}-jobs-${data.aws_caller_identity.current.account_id}"
 }
