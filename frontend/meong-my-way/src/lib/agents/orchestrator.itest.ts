@@ -319,10 +319,10 @@ describe("the run as a whole", () => {
     // once — as this figure originally did — understated the true ceiling by
     // $0.03, which is the kind of error that only shows up on a bill.
     //
-    //   parser 4096 + planner 4096 + improver 3072
-    //   + advisor 2048x2 + swapper 8192x2  = 31,744 out  -> $0.159
+    //   parser 4096 + planner 8192 + improver 3072
+    //   + advisor 4096x2 + swapper 8192x2  = 39,936 out  -> $0.19968
     //   + ~15,000 in                                     -> $0.015
-    expect(totalUsd).toBeLessThan(0.174);
+    expect(totalUsd).toBeLessThan(0.215);
 
     console.info(
       `run cost: $${totalUsd.toFixed(6)} ` +

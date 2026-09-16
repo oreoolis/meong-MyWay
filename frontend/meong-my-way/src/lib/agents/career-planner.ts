@@ -166,7 +166,15 @@ export async function planCareers(profile: ResumeProfile): Promise<PlanResult> {
     agent: "planner",
     system: SYSTEM,
     prompt: buildPrompt(profile, sectors),
-    maxTokens: 4096,
+    // 4096 was too small: this schema asks for exactly 4 `CareerPath` objects
+    // — the same per-item shape (rationale, gaps, milestones, employers) that
+    // made the career swapper measure 5,227-6,293 output tokens and move to
+    // 8192 (see ADR-0002). This agent's reply is missing the swapper's
+    // portableSkills/note/coachBrief, but is otherwise the same size, and was
+    // observed hitting `stopReason: max_tokens` in production. Matching the
+    // swapper's ceiling rather than guessing a smaller number that might just
+    // move the failure to the next verbose resume.
+    maxTokens: 8192,
   });
 
   const plan: CareerPlan = {

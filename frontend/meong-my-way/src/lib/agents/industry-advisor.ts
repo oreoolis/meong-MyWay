@@ -299,7 +299,7 @@ async function groundedAdvice(
     agent: "advisor",
     system: GROUNDED_SYSTEM,
     prompt: groundedPrompt(profile, sector.title, scored, competencies),
-    maxTokens: 2048,
+    maxTokens: 4096,
   });
 
   // Join the model's rationale back onto the framework's facts by ID. Anything
@@ -378,7 +378,7 @@ async function reasonedAdvice(
     agent: "advisor (reasoned)",
     system: REASONED_SYSTEM,
     prompt: reasonedPrompt(profile, sector.title, keywords),
-    maxTokens: 2048,
+    maxTokens: 4096,
   });
 
   const resumeSkills = affirmedSkillNames(profile);

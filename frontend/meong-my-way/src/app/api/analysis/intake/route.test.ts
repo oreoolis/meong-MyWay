@@ -8,6 +8,7 @@ import { POST as intake } from "./route";
 import { POST as complete, GET } from "../route";
 import { QuestionnaireError } from "@/lib/resume/questionnaire";
 import { DocumentRejectedError } from "@/lib/resume/file-policy";
+import { AgentReasoningError } from "@/lib/bedrock/reason";
 const request = (body: unknown) => new Request("http://localhost/api/analysis", { method: "POST", body: JSON.stringify(body) });
 beforeEach(() => { vi.resetAllMocks(); mocks.authenticateRequest.mockResolvedValue({ ok: true, caller: { userId: "verified" } }); mocks.getResume.mockResolvedValue({ resumeId: "r1" }); });
 
@@ -37,6 +38,21 @@ it("keeps stale and rejected-document errors actionable", async () => {
   mocks.beginIntake.mockRejectedValueOnce(new QuestionnaireError("Question generation failed", 502));
   const generationFailure = await intake(request({ resumeId: "r1" }));
   expect(await generationFailure.json()).toMatchObject({ error: "Question generation failed", retryable: true });
+});
+it("marks an AWS-side agent failure retryable and names the agent in the log", async () => {
+  const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  mocks.beginIntake.mockRejectedValueOnce(
+    new AgentReasoningError("Bedrock rejected the parser request.", "parser", new Error("ServiceUnavailableException")),
+  );
+  const failed = await intake(request({ resumeId: "r1" }));
+  expect(failed.status).toBe(502);
+  expect(await failed.json()).toMatchObject({ error: "Could not read your résumé. Try again.", retryable: true });
+  expect(logSpy).toHaveBeenCalledWith(
+    "[api/intake] parser agent failed:",
+    "Bedrock rejected the parser request.",
+    expect.any(Error),
+  );
+  logSpy.mockRestore();
 });
 it("does not expose the internal questionnaire or lease through analysis GET", async () => {
   mocks.getAnalysis.mockResolvedValue({ intake: { leaseToken: "secret", questions: [] }, profile: { candidateName: "Ada" } });
