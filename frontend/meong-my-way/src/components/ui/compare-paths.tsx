@@ -6,6 +6,8 @@ import {
   Building2,
   ChevronDown,
   Compass,
+  ExternalLink,
+  GraduationCap,
   Route as RouteIcon,
   TriangleAlert,
 } from "lucide-react";
@@ -61,6 +63,43 @@ function Chips({ items, tone }: { items: string[]; tone: "neutral" | "accent" })
   );
 }
 
+function CourseRecommendations({ path }: { path: CareerPath }) {
+  return (
+    <ol className={styles.courseList}>
+      {(path.courses ?? []).map((course, index) => (
+        <li key={course.referenceNumber} className={styles.courseItem}>
+          <span className={styles.courseRank} aria-label={`Recommendation ${index + 1}`}>
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <div className={styles.courseCopy}>
+            <div className={styles.courseHeading}>
+              <div>
+                <h4>{course.title}</h4>
+                <p>{course.provider}</p>
+              </div>
+              <a
+                href={course.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`View ${course.title} on MySkillsFuture`}
+              >
+                View course
+                <ExternalLink aria-hidden="true" />
+              </a>
+            </div>
+            <p className={styles.courseDescription}>{course.description}</p>
+            <ul className={styles.courseSkills} aria-label="Skills this course addresses">
+              {course.matchedSkills.map((skill) => (
+                <li key={skill}>{skill}</li>
+              ))}
+            </ul>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 const ROWS: Row[] = [
   {
     // First, and filtered out entirely when the path has no vacancies — see
@@ -107,6 +146,13 @@ const ROWS: Row[] = [
     right: (path) => (
       <SkillGapList gaps={path.gaps} emptyLabel="Nothing blocking was identified." />
     ),
+  },
+  {
+    key: "courses",
+    label: "SkillsFuture Courses",
+    Icon: GraduationCap,
+    left: () => null,
+    right: (path) => <CourseRecommendations path={path} />,
   },
   {
     key: "route",
@@ -302,7 +348,10 @@ export function ComparePaths({
           {/* The openings row is dropped rather than shown empty: a path with
               no live vacancy today should not read as one whose vacancies you
               failed to find. */}
-          {ROWS.filter((row) => row.key !== "openings" || (path.openings?.length ?? 0) > 0).map((row) =>
+          {ROWS.filter((row) =>
+            (row.key !== "openings" || (path.openings?.length ?? 0) > 0) &&
+            (row.key !== "courses" || (path.courses?.length ?? 0) > 0),
+          ).map((row) =>
             <details key={`${path.id}-${row.key}`} className={styles.detail}>
               <summary><row.Icon className="h-4 w-4 shrink-0" />{row.key === "openings" ? openingsLabel(path.openings?.length ?? 0) : row.label}<ChevronDown aria-hidden="true" className={styles.disclosureIcon} /></summary>
               <div className={styles.detailBody}>

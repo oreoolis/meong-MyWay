@@ -119,6 +119,25 @@ export type SalaryBand = {
 
 export type DemandTrend = "high" | "moderate" | "emerging";
 
+/**
+ * A real course from the SkillsFuture course directory.
+ *
+ * Attached after the planner returns, just like live openings. The model does
+ * not invent course titles, providers, descriptions, or links.
+ */
+export type RecommendedCourse = {
+  /** The public SkillsFuture/TGS reference where one is available. */
+  referenceNumber: string;
+  title: string;
+  provider: string;
+  /** Shortened from the directory's objective or course content. */
+  description: string;
+  /** Canonical MySkillsFuture detail page for this reference. */
+  url: string;
+  /** Path gaps that led to this course being recommended. */
+  matchedSkills: string[];
+};
+
 /* -------------------------------------------------------------------------
  * Live job openings
  *
@@ -206,6 +225,8 @@ export type CareerPath = {
   openings?: JobOpening[];
   /** What those openings collectively want that the resume lacks. */
   openingsGap?: OpeningsGap;
+  /** Official courses that address this path's most important skill gaps. */
+  courses?: RecommendedCourse[];
 };
 
 export type CurrentTrajectory = {
