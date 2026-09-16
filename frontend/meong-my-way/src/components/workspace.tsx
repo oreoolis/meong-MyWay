@@ -69,9 +69,13 @@ export function Workspace() {
   const [analysis, setAnalysis] = useState<AnalysisBundle | null>(null);
   /** Which results view is open. `null` is the fork itself. */
   const [branch, setBranch] = useState<ResultsBranch | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /** Whether `error` is worth a "Try again" button, rather than a dead end. */
-  const [errorRetryable, setErrorRetryable] = useState(true);
+  /**
+   * A pipeline failure the analysis stage shows, paired with whether it is
+   * worth a "Try again" button. One state rather than two: a run that
+   * forgets to reset one half on a separate line is exactly the kind of bug
+   * that turned up here once already — this makes it unrepresentable.
+   */
+  const [failure, setFailure] = useState<{ message: string; retryable: boolean } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deletingResume, setDeletingResume] = useState(false);
@@ -214,9 +218,7 @@ export function Workspace() {
       setStoredAnalysis(null);
       setBranch(null);
       setSwapState("idle");
-      setError(null);
-    setErrorRetryable(true);
-      setErrorRetryable(true);
+      setFailure(null);
       setUploadError(null);
       setPhase("uploading");
       setBusy(true);
@@ -271,8 +273,7 @@ export function Workspace() {
           setUploadError(message);
           setStage("upload");
         } else {
-          setError(message);
-          setErrorRetryable(isRetryableFailure(err));
+          setFailure({ message, retryable: isRetryableFailure(err) });
         }
       } finally {
         if (abortRef.current === controller) setBusy(false);
@@ -303,9 +304,7 @@ export function Workspace() {
       setAnalysis(null);
       setBranch(null);
       setSwapState("idle");
-      setError(null);
-    setErrorRetryable(true);
-      setErrorRetryable(true);
+      setFailure(null);
       setUploadError(null);
       setStage("landing");
       pipelineCache.current = {};
@@ -321,8 +320,7 @@ export function Workspace() {
     setAnalysis(storedAnalysis);
     setBranch(null);
     setSwapState(storedAnalysis.swap ? "done" : "idle");
-    setError(null);
-    setErrorRetryable(true);
+    setFailure(null);
     setUploadError(null);
     setStage("results");
   }
@@ -364,8 +362,7 @@ export function Workspace() {
     setAnalysis(null);
     setBranch(null);
     setSwapState("idle");
-    setError(null);
-    setErrorRetryable(true);
+    setFailure(null);
     setUploadError(null);
     setStage("upload");
     setBusy(false);
@@ -377,8 +374,7 @@ export function Workspace() {
   function handleHome() {
     abortRef.current?.abort();
     setBusy(false);
-    setError(null);
-    setErrorRetryable(true);
+    setFailure(null);
     setUploadError(null);
     setStage("landing");
     requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
@@ -445,7 +441,7 @@ export function Workspace() {
           />
         ) : null}
 
-        {stage === "questionnaire" && intake ? <QuestionnaireStage questionnaire={intake.questionnaire} selections={selections} onChange={setSelections} busy={busy} error={error} onContinue={(answers: QuestionnaireSelection[]) => {
+        {stage === "questionnaire" && intake ? <QuestionnaireStage questionnaire={intake.questionnaire} selections={selections} onChange={setSelections} busy={busy} error={failure?.message ?? null} onContinue={(answers: QuestionnaireSelection[]) => {
           const resolve = answerRef.current;
           if (!resolve) return;
           answerRef.current = null;
@@ -466,8 +462,8 @@ export function Workspace() {
               swapper: cardState(agentSteps.swapper),
             }}
             profile={analysis?.profile ?? null}
-            error={error}
-            errorRetryable={errorRetryable}
+            error={failure?.message ?? null}
+            errorRetryable={failure?.retryable ?? true}
             onRetry={() => file && void runPipeline(file)}
             onStartOver={handleStartOver}
             phase={phase}

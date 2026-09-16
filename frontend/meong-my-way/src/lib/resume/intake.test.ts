@@ -12,12 +12,21 @@ import { normaliseQuestions } from "./questionnaire";
 import { beginIntake, completeIntake } from "./intake";
 
 let persisted: PendingResumeIntake | undefined;
+/**
+ * What `runAnalysis` has durably written for the resume so far — profile and
+ * embedding land there before the planner runs, so they survive a planner
+ * failure. Modelled here as its own store, distinct from `persisted`, because
+ * production keeps them in the same DynamoDB partition but `runAnalysis`
+ * writes them itself rather than through `saveIntake`.
+ */
+let storedAnalysis: { profile?: unknown; embedding?: unknown };
 beforeEach(() => {
   vi.resetAllMocks();
   persisted = undefined;
+  storedAnalysis = {};
   mocks.lockIntake.mockResolvedValue("lock");
   mocks.getResume.mockResolvedValue({ resumeId: "r1", userId: "verified-user", format: "pdf" });
-  mocks.getAnalysis.mockImplementation(async () => ({ intake: persisted }));
+  mocks.getAnalysis.mockImplementation(async () => ({ intake: persisted, ...storedAnalysis }));
   mocks.saveIntake.mockImplementation(async (_user, next) => { persisted = structuredClone(next); });
   mocks.parseResumeProfile.mockResolvedValue(structuredClone(parsedFixture));
   mocks.generateQuestions.mockResolvedValue({ questions: normaliseQuestions(gapsFixture, parsedFixture), usage: { inputTokens: 10, outputTokens: 10 } });
@@ -71,6 +80,31 @@ describe("intake and completion lifecycle", () => {
     delete persisted!.result;
     persisted!.leaseUntil = Math.floor(Date.now() / 1000) + 50;
     await expect(completeIntake("verified-user", submission)).rejects.toThrow("still running");
+  });
+  it("resumes after the planner's death without paying for the embedding twice", async () => {
+    // Mirrors what `runAnalysis` really does: profile and embedding are
+    // written before the planner runs, so they are already durable by the
+    // time it dies. The mock's `getAnalysis` reads them back the same way
+    // production does, through `storedAnalysis`.
+    mocks.runAnalysis.mockImplementationOnce(async () => {
+      storedAnalysis.profile = { candidateName: "Ada" };
+      storedAnalysis.embedding = { model: "titan", dimensions: 2, vector: [1, 0], text: "embedded text" };
+      throw new Error("planner failed");
+    });
+    await beginIntake("verified-user", "r1");
+    const submission = body();
+    await expect(completeIntake("verified-user", submission)).rejects.toThrow("planner failed");
+    expect(mocks.embedParsedResume).toHaveBeenCalledTimes(1);
+
+    await completeIntake("verified-user", submission);
+    // Not called again: the retry reused the profile/embedding the failed
+    // attempt already stored instead of re-running the Bedrock/Titan calls.
+    expect(mocks.embedParsedResume).toHaveBeenCalledTimes(1);
+    const secondCall = mocks.runAnalysis.mock.calls[1];
+    expect(secondCall[2].parsed).toMatchObject({
+      profile: { candidateName: "Ada" },
+      embeddingText: "embedded text",
+    });
   });
   it("rejects replacement and deletion before using old intake", async () => {
     await beginIntake("verified-user", "r1");
