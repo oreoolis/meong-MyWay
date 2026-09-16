@@ -243,7 +243,9 @@ function build(t) {
     o.push(text(ox + 58, ay + 37, sub, { t, size: 10.5, fill: "muted" }));
     ay += h + 8;
   });
-  o.push(text(ox + 14, oy + oh - 14, "Agents 3–5 fan out concurrently — Promise.allSettled", { t, size: 10.5, fill: "muted" }));
+  o.push(text(ox + 14, oy + oh - 34, "Agent 1 stores profile + embedding before the planner runs. A retry after a", { t, size: 10.5, fill: "muted" }));
+  o.push(text(ox + 14, oy + oh - 21, "later agent dies resumes from there instead of recomputing them.", { t, size: 10.5, fill: "muted" }));
+  o.push(text(ox + 14, oy + oh - 5, "Agents 3–5 fan out concurrently — Promise.allSettled", { t, size: 10.5, fill: "muted" }));
 
   /* ------------------------------------------------------------ AWS CLOUD */
   const ax = 810, ay0 = 100, aw = 470, ah = 682;
@@ -266,7 +268,7 @@ function build(t) {
   o.push(text(sx + 16, sy + 24, "STORAGE", { t, size: 10.5, weight: 700, fill: "muted" }));
   o.push(service(sx + 16, sy + 36, "s3", "Amazon S3 · uploads", "resume bytes · ≤5 MB · byte-sniffed", t));
   o.push(service(sx + 16, sy + 92, "dynamodb", "DynamoDB · resumes", "one current resume per user", t));
-  o.push(service(sx + 16, sy + 148, "dynamodb", "DynamoDB · analyses", "one item per artifact · TTL 30d", t));
+  o.push(service(sx + 16, sy + 148, "dynamodb", "DynamoDB · analyses", "one item per artifact · retry checkpoint · TTL 30d", t));
   o.push(service(sx + 16, sy + 204, "s3", "Amazon S3 · jobs", "jobs/latest.json · shared, not per-user", t));
 
   // Identity

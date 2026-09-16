@@ -89,13 +89,10 @@ The two answer different questions. The Skills Framework is a **taxonomy** — w
 Everything is one Next.js app: pages and API routes ship from the same codebase, deployed as a single unit. There is no separate backend service. The `src/app/api/*` route handlers are the server, calling AWS directly with the runtime's own credentials.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/img/architecture-dark.svg" />
-    <img src="docs/img/architecture-light.svg" alt="MyWay AWS architecture: browser, Next.js compute, the Bedrock, S3, DynamoDB, Cognito and IAM services behind it, and a scheduled Lambda job-listings feed" width="100%" />
-  </picture>
+  <img src="docs/img/architecture-excalidraw.svg" alt="MyWay AWS architecture: browser, Next.js compute, the Bedrock, S3, DynamoDB, Cognito and IAM services behind it, the DynamoDB analyses table marked as the retry checkpoint, and a scheduled Lambda job-listings feed" width="100%" />
 </p>
 
-<sub>Icons: <a href="https://aws.amazon.com/architecture/icons/">AWS Architecture Icons</a>, except Lambda, EventBridge and CloudWatch — those three are plain stand-in tiles in the service's category colour, since their official SVGs are not vendored under <code>docs/img/aws/</code> yet. Diagram regenerated with <code>node scripts/gen-architecture.js docs/img</code>.</sub>
+<sub>Source: <a href="docs/architecture.excalidraw"><code>docs/architecture.excalidraw</code></a>, open it in the <a href="https://excalidraw.com">Excalidraw</a> app (web, desktop, or the VS Code extension) to view or edit it visually. Icons: <a href="https://aws.amazon.com/architecture/icons/">AWS Architecture Icons</a>, except Lambda, EventBridge and CloudWatch, which are plain stand-in tiles in the service's category colour since their official SVGs are not vendored under <code>docs/img/aws/</code> yet. Regenerate the source with <code>node scripts/gen-architecture-excalidraw.js docs/architecture.excalidraw</code>, then the embedded image with <code>node scripts/render-architecture-excalidraw.js docs/architecture.excalidraw docs/img/architecture-excalidraw.svg</code>.</sub>
 
 ### The same thing as a flow graph
 
@@ -224,9 +221,11 @@ So the reasoning model is now `us.anthropic.claude-haiku-4-5-20251001-v1:0` at $
 |---|---|---|
 | Nova Lite | ~$0.0025 | ~8,000 |
 | Haiku 4.5, measured typical | ~$0.078 | ~256 |
-| Haiku 4.5, every agent at its ceiling | ~$0.174 | ~115 |
+| Haiku 4.5, every agent at its ceiling | ~$0.215 | ~93 |
 
-The honest claim is not "it fits" but "it cannot exceed ~$0.17 per run, so the budget cannot be spent in fewer than ~115 analyses". For a project that has run in the low hundreds, that buys the one capability the product is sold on.
+The honest claim is not "it fits" but "it cannot exceed ~$0.22 per run, so the budget cannot be spent in fewer than ~93 analyses". For a project that has run in the low hundreds, that buys the one capability the product is sold on.
+
+The ceiling moved twice after this ADR was written, both times because a real run hit `stopReason: max_tokens`: the industry advisor's schema grew per-role strengths and gaps without its ceiling moving with it, and the general planner's ceiling had simply never been checked against the size of its own reply. See [the token ceiling entry](#troubleshooting) below for both.
 
 Two consequences of the switch are easy to trip over:
 
@@ -390,6 +389,22 @@ sequenceDiagram
 Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 4 and 5 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 6 sits deliberately outside that fan-out.
 
 The upload flow pauses at an optional résumé questionnaire before embedding and analysis. See [questionnaire architecture, validation and evaluation](docs/resume-questionnaire.md) for API contracts, expiry, retries, deployment implications and test results.
+
+### Retry and resume: what survives a failed run
+
+When an agent dies partway through, a retry does not start the pipeline over from the résumé bytes. Each step checkpoints what it produced before handing off, and a retry picks up after the last checkpoint that actually completed, not from zero. This is worth understanding early, because it explains why some retries are instant and others cost a real model call again.
+
+**Step 1, parsing.** `beginIntake()` in `lib/resume/intake.ts` parses the résumé, then calls `saveIntake()` to persist the parsed profile before it ever calls the question generation agent. If question generation fails, a retry finds the parsed profile already saved and does not read the document again.
+
+**Step 2, embedding.** This is the part that changed. `completeIntake()` refines the profile with the questionnaire answers and produces the final embedding, and until now it recomputed that embedding on every retry, even when the failure happened later, in the planner. That mattered because `runAnalysis()` in `lib/agents/orchestrator.ts` already writes the profile and the embedding to the `analyses` DynamoDB table before the planner runs, so the data a retry needed was already sitting there unused. `reusableParseResult()` now checks for that stored pair first. If both are present it reuses them and skips the embedding call entirely. If either is missing, it falls back to computing them as before.
+
+This reuse is safe because `intake.submissionKey` locks a résumé to one set of questionnaire answers the first time a request reaches this step. Any later request with different answers is rejected before it gets this far, so a stored profile and embedding for a résumé can only be the product of the one submission that is still in progress.
+
+**Steps 3 and 4, the specialists.** The Resume Improver and the Industry Advisor already do not need this. They run inside `Promise.allSettled`, so one of them failing does not throw the whole request, and does not lose the plan the other one needs. The bundle simply carries a null result for whichever one failed, and the UI renders that as a real, honest state rather than an error.
+
+**Step 5, the swapper.** Already fully independent by design. `runCareerSwap()` reads the profile, the embedding, and the routing back from storage on every call, so it can be retried on its own, from a separate request, as many times as needed.
+
+**What this means in practice.** If the planner is the agent that dies, a retry now skips both parsing and embedding, and pays only for the planner call again. That is a meaningfully cheaper and faster retry than reprocessing the whole document, and it is why a token ceiling fix (see [Troubleshooting](#troubleshooting)) is no longer paired with a full pipeline restart on the next attempt.
 
 ### Latency: why the swapper runs separately
 
@@ -995,9 +1010,15 @@ Temporary `ASIA…` session credentials have aged out, which is common with lab 
 **An agent fails with "hit its token ceiling before finishing"**
 `AgentReasoningError` raised by `lib/bedrock/reason.ts` when Bedrock returns `stopReason: "max_tokens"`. The reply was cut off mid-object, so it is named rather than left to surface as a confusing parse error. The fix is the agent's `maxTokens`, not a retry: temperature is 0, so the same run fails identically every time.
 
-This bit the Career Swapper at the original 4096. Measured, its reasoned tier needs **5,227 to 6,293 output tokens** to emit four destinations with rationales, gaps, milestones and a coach brief, so both its tiers now run at 8192 (`DESTINATION_CEILING` in `career-swapper.ts`). The roughly 1,000-token spread between two similar resumes is why the ceiling has headroom rather than sitting just above the first measurement: the cost tracks how much the resume gives the model to work with.
+This bit the Career Swapper at the original 4096. Measured, its reasoned tier needs **5,227 to 6,293 output tokens** to emit four destinations with rationales, gaps, milestones and a coach brief, so both its tiers now run at 8192 (`DESTINATION_CEILING` in `career-swapper.ts`). The roughly 1,000-token spread between two similar resumes is why the ceiling has headroom rather than sitting just above the first measurement, the cost tracks how much the resume gives the model to work with.
 
-Raising any agent's ceiling invalidates the budget arithmetic in [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md). The per-run bound is now **$0.174** worst case against a measured typical of **~$0.078**, and `orchestrator.itest.ts` asserts it. Note that the bound counts the advisor and swapper **twice**: both run a grounded tier and fall back to a reasoned one, and a grounded call that returns no valid role ID has already been paid for when the reasoned call fires.
+It also bit the Industry Advisor and the General Career Planner, both caught in production logs rather than in a test. The advisor's schema grew per-role `strengths` and `gaps` fields without its 2048 ceiling moving with it, so it now runs at 4096. The planner asks for exactly 4 `CareerPath` objects, the same per-item shape (rationale, gaps, milestones, employers) that made the swapper measure 5,227 to 6,293 output tokens, but its ceiling had been left at 4096 since ADR-0002's original figure and was never re-measured against that shape. It now runs at 8192, matching the swapper rather than guessing a smaller number that would just move the failure to the next verbose resume.
+
+**A worked example of how this surfaced.** A production log read `[api/analysis] planner agent failed: undefined`. The route's catch block logged `error.cause`, and `cause` is `undefined` for exactly this failure mode: `reason.ts` names the truncation in `error.message`, not in a wrapped exception, so logging `cause` alone hid the reason. Both routes now log `error.message` alongside `error.cause` for this reason. If you hit an agent failure with no clear cause in the log, check `error.message` first.
+
+Raising any agent's ceiling invalidates the budget arithmetic in [ADR-0002](docs/adr/0002-claude-haiku-for-grounded-advice.md). The per-run bound is now **$0.215** worst case against a measured typical of **~$0.078**, and `orchestrator.itest.ts` asserts it. Note that the bound counts the advisor and swapper **twice**: both run a grounded tier and fall back to a reasoned one, and a grounded call that returns no valid role ID has already been paid for when the reasoned call fires.
+
+**A retry after this error does not restart the whole pipeline.** The parser's output was already checkpointed before this error class existed. What changed is the embedding step: `completeIntake()` in `lib/resume/intake.ts` used to recompute the profile embedding on every retry, even when a later agent (the planner) was the one that died. `runAnalysis()` writes the profile and embedding to the `analyses` DynamoDB table before the planner runs, so `reusableParseResult()` now checks for that stored pair first and reuses it instead of paying for `embedParsedResume()` again. Safe because `intake.submissionKey` is locked to one set of questionnaire answers, so a stored profile and embedding for a resume can only be the product of that exact submission. See [Retry and resume](#retry-and-resume-what-survives-a-failed-run) below for the full chain.
 
 **No "Suggested job openings" disclosure on any role or path**
 Four separate links in that chain, and all four fail the same silent way — no error, the disclosure simply never renders. Check them in order:

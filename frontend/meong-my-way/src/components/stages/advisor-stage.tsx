@@ -17,6 +17,7 @@ import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
 import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
 import { SkillGapList } from "@/components/ui/skill-gap-list";
+import { SpecularButton } from "@/components/ui/specular-button";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { ResultsToolbar } from "@/components/ui/results-toolbar";
 import { cn, formatCompactMoney } from "@/lib/utils";
@@ -50,65 +51,152 @@ function SuggestedRewrite({ text }: { text: string }) {
   });
 }
 
+type RoleDisclosureKey = "openings" | "rationale" | "guidance";
+
 /**
- * What the match meter on a role actually means, and how to move it.
+ * The three things worth digging into for a matched role — vacancies, why it
+ * fits, and how to raise the match — as a row of toggles instead of stacked
+ * disclosures, so a role card reads as one scannable line. Independent
+ * toggles, not tabs: any combination can be open at once, same as the
+ * `<details>` elements this replaced.
  *
- * The meter on its own was a number with nothing behind it — it told someone
- * where they stood and gave them no way to act. This is the other half: what
- * the resume is already getting credit for, and what it is not.
- *
- * Rendered closed, beside "Why this fits", so the roles list stays scannable.
- * Absent for a run stored before the advisor produced either list, which is
- * why both sides are optional and the whole disclosure disappears when there
- * is nothing truthful to put in it.
+ * Absent for a run stored before the advisor produced any of the three,
+ * which is why each side is optional and the whole row disappears when
+ * there is nothing truthful to put in it.
  */
-function RoleGuidance({ role }: { role: MatchedRole }) {
+function RoleDisclosures({ role }: { role: MatchedRole }) {
   const strengths = role.strengths ?? [];
   const gaps = role.gaps ?? [];
+  const openings = role.openings ?? [];
 
-  if (strengths.length === 0 && gaps.length === 0) return null;
+  const hasOpenings = openings.length > 0;
+  const hasRationale = Boolean(role.rationale);
+  const hasGuidance = strengths.length > 0 || gaps.length > 0;
+
+  const [open, setOpen] = useState<Set<RoleDisclosureKey>>(new Set());
+
+  if (!hasOpenings && !hasRationale && !hasGuidance) return null;
+
+  const toggle = (key: RoleDisclosureKey) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Tuned for this page's light surface, where the component's own defaults
+  // (a white edge stroke and white label) were built for a dark one and read
+  // as nearly invisible. Open state fills with the accent instead of relying
+  // on the sweep alone, since the highlight only shows near the pointer.
+  const toneFor = (key: RoleDisclosureKey) => {
+    const isOpen = open.has(key);
+    return {
+      textColor: isOpen ? "#ffffff" : "#111827",
+      baseColor: isOpen ? "#3b82f6" : "#d1d5db",
+      lineColor: "#3b82f6",
+      tint: "#3b82f6",
+      tintOpacity: isOpen ? 1 : 0,
+    };
+  };
+
+  // Replacing `<details>/<summary>` cost the free disclosure relationship
+  // that nesting gave assistive tech — the panel is a sibling now, not a
+  // child of the control — so it is rebuilt explicitly with matching ids.
+  const panelId = (key: RoleDisclosureKey) => `${role.id}-${key}`;
 
   return (
-    <details className={styles.inlineDetail}>
-      <summary>
-        How to raise this match
-        <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
-      </summary>
-      <div className={styles.inlineDetailBody}>
-        {/* Deliberately says "compares", not "is the cosine similarity of":
-            the framework tier scores by embedding and the reasoned tier by the
-            model's own judgement, and this line has to stay true of both. */}
-        <p className="text-[12.5px] leading-relaxed text-ink-muted">
-          {role.matchScore}/100 is how closely your resume reads against what
-          this role asks for. Evidencing the items below is what moves it.
-        </p>
-
-        {strengths.length > 0 ? (
-          <div className="mt-4">
-            <SectionLabel>What is already carrying it</SectionLabel>
-            <ul className="mt-2 space-y-1.5" role="list">
-              {strengths.map((strength) => (
-                <li key={strength} className="flex gap-2">
-                  <Check aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
-                  <p className="min-w-0 text-[13px] leading-relaxed text-ink-2">
-                    {strength}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
+    <>
+      <div className="mt-3 flex flex-wrap gap-2.5">
+        {hasOpenings ? (
+          <SpecularButton
+            size="sm"
+            radius={999}
+            aria-expanded={open.has("openings")}
+            aria-controls={panelId("openings")}
+            onClick={() => toggle("openings")}
+            {...toneFor("openings")}
+          >
+            {openingsLabel(openings.length)}
+          </SpecularButton>
         ) : null}
 
-        {gaps.length > 0 ? (
-          <div className="mt-4">
-            <SectionLabel>What is holding it back</SectionLabel>
-            <div className="mt-2">
-              <SkillGapList gaps={gaps} />
-            </div>
-          </div>
+        {hasRationale ? (
+          <SpecularButton
+            size="sm"
+            radius={999}
+            aria-expanded={open.has("rationale")}
+            aria-controls={panelId("rationale")}
+            onClick={() => toggle("rationale")}
+            {...toneFor("rationale")}
+          >
+            Why this fits
+          </SpecularButton>
+        ) : null}
+
+        {hasGuidance ? (
+          <SpecularButton
+            size="sm"
+            radius={999}
+            aria-expanded={open.has("guidance")}
+            aria-controls={panelId("guidance")}
+            onClick={() => toggle("guidance")}
+            {...toneFor("guidance")}
+          >
+            How to raise this match
+          </SpecularButton>
         ) : null}
       </div>
-    </details>
+
+      {hasOpenings && open.has("openings") ? (
+        <div id={panelId("openings")} className={styles.inlineDetailBody}>
+          <OpeningBadges openings={openings} gap={role.openingsGap} className="mt-1" />
+        </div>
+      ) : null}
+
+      {hasRationale && open.has("rationale") ? (
+        <div id={panelId("rationale")} className={styles.inlineDetailBody}>
+          <p className="text-[13px] leading-relaxed text-ink-2">{role.rationale}</p>
+        </div>
+      ) : null}
+
+      {hasGuidance && open.has("guidance") ? (
+        <div id={panelId("guidance")} className={styles.inlineDetailBody}>
+          {/* Deliberately says "compares", not "is the cosine similarity of":
+              the framework tier scores by embedding and the reasoned tier by
+              the model's own judgement, and this line has to stay true of both. */}
+          <p className="text-[12.5px] leading-relaxed text-ink-muted">
+            {role.matchScore}/100 is how closely your resume reads against what
+            this role asks for. Evidencing the items below is what moves it.
+          </p>
+
+          {strengths.length > 0 ? (
+            <div className="mt-4">
+              <SectionLabel>What is already carrying it</SectionLabel>
+              <ul className="mt-2 space-y-1.5" role="list">
+                {strengths.map((strength) => (
+                  <li key={strength} className="flex gap-2">
+                    <Check aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+                    <p className="min-w-0 text-[13px] leading-relaxed text-ink-2">
+                      {strength}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {gaps.length > 0 ? (
+            <div className="mt-4">
+              <SectionLabel>What is holding it back</SectionLabel>
+              <div className="mt-2">
+                <SkillGapList gaps={gaps} />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -225,35 +313,7 @@ export function AdvisorStage({
                       readier to act on "here is a vacancy" than to read why
                       the role suits them, and the rationale is still one
                       click away directly below. */}
-                  {role.openings?.length ? (
-                    <details className={styles.inlineDetail}>
-                      <summary>
-                        {openingsLabel(role.openings.length)}
-                        <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
-                      </summary>
-                      <div className={styles.inlineDetailBody}>
-                        <OpeningBadges
-                          openings={role.openings}
-                          gap={role.openingsGap}
-                          className="mt-1"
-                        />
-                      </div>
-                    </details>
-                  ) : null}
-
-                  {role.rationale ? (
-                    <details className={styles.inlineDetail}>
-                      <summary>
-                        Why this fits
-                        <ChevronDown aria-hidden="true" className={styles.disclosureIcon} />
-                      </summary>
-                      <div className={styles.inlineDetailBody}>
-                        <p className="text-[13px] leading-relaxed text-ink-2">{role.rationale}</p>
-                      </div>
-                    </details>
-                  ) : null}
-
-                  <RoleGuidance role={role} />
+                  <RoleDisclosures role={role} />
                 </article>
               ))}
             </div>
