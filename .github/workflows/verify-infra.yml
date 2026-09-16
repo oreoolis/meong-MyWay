@@ -106,7 +106,7 @@ jobs:
           format: 'table'
           exit-code: '1'
           severity: 'HIGH,CRITICAL'
-          trivyignores: '.trivyignore'
+          # trivyignores: '.trivyignore'
   
       - name: Checkov Scan
         uses: bridgecrewio/checkov-action@master
