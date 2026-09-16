@@ -220,6 +220,7 @@ function SwapProgress() {
         className="mt-5"
         value={progress}
         active
+        showValue={false}
         label="Career swapper progress"
         hint="Usually about 30 seconds"
       />

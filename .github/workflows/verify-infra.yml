@@ -1,0 +1,186 @@
+name: Terraform Test
+
+on:
+  pull_request:
+    paths:
+      - **.tf
+      - **.tfvars
+      - .github/workflows/verify-infra.yml
+
+concurrency:
+  group: terraform-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+#validate tf files
+jobs:
+  format-and-validate:
+    name: Format & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      - name: Format Check
+        id: fmt
+        run: terraform fmt -check -recursive -diff
+        continue-on-error: true
+
+      - name: Validate All Modules
+        id: validate
+        run: |
+          STATUS=0
+          for dir in $(find . -name "*.tf" -exec dirname {} \; | sort -u); do
+            echo "::group::Validating $dir"
+            cd "$dir"
+            terraform init -backend=false -input=false > /dev/null 2>&1
+            if ! terraform validate; then
+              STATUS=1
+            fi
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done
+          exit $STATUS
+
+      - name: Post Format Results
+        if: steps.fmt.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Terraform Format Check Failed**\n\nRun \`terraform fmt -recursive\` locally and push the changes.`
+            })
+
+      - name: Fail on format error
+        if: steps.fmt.outcome == 'failure'
+        run: exit 1
+
+  #verify provider specific issues
+  lint:
+    name: Lint
+    needs: format-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+  
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+      - name: Run TFLint
+        run: |
+          for dir in $(find . -name "*.tf" -exec dirname {} \; | sort -u); do
+            echo "::group::Linting $dir"
+            tflint --chdir="$dir"
+            echo "::endgroup::"
+          done
+
+  #scan for misconfigurations
+  security:
+    name: Security Scan
+    needs: format-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Trivy Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          trivyignores: '.trivyignore'
+  
+      - name: Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          output_format: github_failed_only
+        
+  unit-tests:
+    name: Unit Tests
+    needs: [lint, security]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - modules/networking
+          - modules/compute
+          - modules/database
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+
+      - name: Run Tests
+        working-directory: ${{ matrix.module }}
+        run: |
+          terraform init -backend=false
+          terraform test -verbose
+
+  integration:
+    name: Integration Tests
+    needs: plan
+    if: contains(github.event.pull_request.labels.*.name, 'run-integration')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+  
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+  
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TEST_ROLE_ARN }}
+          aws-region: us-east-1
+  
+      - name: Run Integration Tests
+        working-directory: test
+        timeout-minutes: 30
+        run: go test -v -timeout 25m ./...
+        env:
+          TEST_PREFIX: "gha-${{ github.run_id }}"
+  
+      - name: Cleanup on Failure
+        if: failure()
+        run: |
+          echo "Integration tests failed. Running cleanup..."
+          cd test
+          go test -v -timeout 10m -run TestCleanup ./...

@@ -583,13 +583,61 @@ function skillTokens(skill: string): Set<string> {
 }
 
 /**
+ * Skill heads whose modifier carries the whole discipline.
+ *
+ * These are the words that name *what kind of activity* a skill is without
+ * saying what it is applied to — and for each of them, the modifier is not a
+ * qualifier on a shared skill but the entire content of a different one:
+ *
+ *   administration  "Database Administration" / "Office Administration"
+ *   analysis        "Financial Analysis" / "Clinical Analysis"
+ *   development     "Software Development" / "Business Development"
+ *   engineering     "Civil Engineering" / "Software Engineering"
+ *   maintenance     "Aircraft Maintenance" / "Software Maintenance"
+ *   management      "Contract Management" / "Warehouse Management"
+ *   operations      "Sales Operations" / "Kitchen Operations"
+ *   testing         "Software Testing" / "Material Testing"
+ *
+ * The test for admitting a word here is whether "X X-head" is reliably a
+ * *different skill* from the bare head, not merely a more precise spelling of
+ * it. "Leadership" deliberately fails that test and is absent: "Team
+ * Leadership" is the same skill the résumé means by "Leadership", and so is
+ * "Microsoft Excel" for "Excel". Those are the cases `skillsMeet` exists to
+ * absorb, and this list must not swallow them.
+ */
+const GENERIC_SKILL_HEADS = new Set([
+  "administration", "analysis", "analytics", "design", "development",
+  "engineering", "maintenance", "management", "operations", "planning",
+  "research", "testing",
+]);
+
+/**
  * Whether a resume skill covers a posting's skill.
  *
- * Subset-or-majority rather than string equality, because the two vocabularies
- * are written by different parties: the employer says "Team Leadership" where
- * the resume says "Leadership", and treating those as different would report a
- * gap that does not exist — the failure that would make this advice worse than
- * silence.
+ * Subset rather than string equality, because the two vocabularies are written
+ * by different parties: the employer says "Team Leadership" where the resume
+ * says "Leadership", and treating those as different would report a gap that
+ * does not exist — the failure that would make this advice worse than silence.
+ *
+ * But subset in the other direction is how a résumé skills-section entry came
+ * to claim skills nobody has. The rule was plain "either set contains the
+ * other", so a one-word skill swallowed every posting skill built on that word:
+ * "Engineering" matched Civil and Chemical Engineering, "Management" matched
+ * Contract, Risk and Warehouse Management, and each false match **deleted a
+ * real gap** — `summariseGap` builds "what to learn first" out of
+ * `missingSkills`, so this lost advice silently rather than adding noise. The
+ * parser produces exactly the input that triggers it, scoring bare
+ * skills-section entries at 0.5 confidence and keeping up to twenty of them.
+ *
+ * So a strict subset now has to earn the match: the narrower side must name
+ * something specific enough to stand on its own. "Excel" does, "Leadership"
+ * does, "Engineering" does not.
+ *
+ * Applied to whichever side is narrower rather than only to the résumé's, so
+ * the relation stays symmetric. That does mean a posting asking for bare
+ * "Management" reads as a gap for someone whose résumé says "Contract
+ * Management" — a visible false miss, which the reader can dismiss, and the
+ * safer half of the trade this file already makes for titles.
  */
 function skillsMeet(a: Set<string>, b: Set<string>): boolean {
   if (a.size === 0 || b.size === 0) return false;
@@ -598,7 +646,18 @@ function skillsMeet(a: Set<string>, b: Set<string>): boolean {
   for (const token of a) if (b.has(token)) shared += 1;
   if (shared === 0) return false;
 
-  return shared >= Math.min(a.size, b.size);
+  // Neither side contains the other: an incidental word in common, which is
+  // "Project Management" against "Project Finance" and not a match.
+  if (shared < Math.min(a.size, b.size)) return false;
+
+  // Same size and a full overlap means the same tokens — the same skill,
+  // whatever it is made of.
+  if (a.size === b.size) return true;
+
+  const narrower = a.size < b.size ? a : b;
+  for (const token of narrower) if (!GENERIC_SKILL_HEADS.has(token)) return true;
+
+  return false;
 }
 
 /** Split a posting's key skills into what the resume shows and what it does not. */
