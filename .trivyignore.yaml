@@ -1,0 +1,35 @@
+# Trivy misconfiguration suppressions.
+#
+# Every entry here needs a reason a reader can disagree with. An unexplained
+# suppression is indistinguishable from a bug someone silenced in a hurry, and
+# the whole value of the scan is that its failures mean something.
+
+misconfigurations:
+  # AWS-0132: "Bucket does not encrypt data with a customer managed key."
+  #
+  # Scoped to iac/jobs.tf on purpose. The uploads bucket in iac/s3.tf holds
+  # résumé documents and now has its own CMK, so it is not covered here and a
+  # regression there will still fail the build.
+  #
+  # The jobs bucket holds a single object: a snapshot of job postings scraped
+  # from MyCareersFuture's public, unauthenticated API. It contains nothing
+  # that is not already on the open web, so a customer-managed key would add
+  # rotation and decrypt auditing to public data at a standing monthly charge —
+  # against a project whose entire budget is $20. The bucket does declare
+  # SSE-S3 explicitly, so the data is encrypted at rest; what is declined is
+  # the CMK, not the encryption.
+  #
+  # Revisit if this bucket ever carries anything user-specific.
+  #
+  # Both ID spellings are listed because Trivy has reported this rule as
+  # "AWS-0132" and as "AVD-AWS-0132" depending on version, and an ignore entry
+  # that silently matches nothing is worse than none.
+  - id: AWS-0132
+    paths:
+      - "iac/jobs.tf"
+    statement: "Public job-postings snapshot; SSE-S3 declared explicitly, CMK not warranted."
+
+  - id: AVD-AWS-0132
+    paths:
+      - "iac/jobs.tf"
+    statement: "Public job-postings snapshot; SSE-S3 declared explicitly, CMK not warranted."

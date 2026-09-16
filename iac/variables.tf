@@ -75,3 +75,23 @@ variable "create_iam" {
   type    = bool
   default = false
 }
+
+# Encrypt the uploads bucket with a customer-managed KMS key instead of the
+# SSE-S3 key S3 applies by default.
+#
+# Defaults on: the bucket holds personal data, and Trivy's AWS-0132 asks for a
+# CMK specifically — SSE-S3 does not satisfy it, however explicitly declared.
+#
+# Turn it off for an account that cannot create KMS keys, and understand what
+# that costs before you do: every principal reading or writing résumé objects
+# needs `kms:Decrypt` and `kms:GenerateDataKey` on the key, so this is also the
+# switch to reach for if uploads start failing with AccessDenied against
+# credentials that were working before. The grant belongs in whichever policy
+# governs that principal — see the KMS statement in iam.tf.
+#
+# ~$1/month for the key, plus requests. `bucket_key_enabled` in s3.tf is what
+# keeps the request half of that negligible.
+variable "enable_kms_encryption" {
+  type    = bool
+  default = true
+}
