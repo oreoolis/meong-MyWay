@@ -99,7 +99,7 @@ export function UploadStage({
       <section className="flex flex-1 items-center justify-center px-5 py-12 sm:px-8">
         <div className="w-full max-w-md">
           <div className="mw-rise">
-            <SectionLabel>Step 1 of 4</SectionLabel>
+            <SectionLabel>Step 1 of 3</SectionLabel>
             <h1 className="mt-2 text-[30px] font-semibold leading-[1.15] tracking-tight text-ink sm:text-[34px]">
               {replacing ? "Replace your resume" : "Upload your resume"}
             </h1>
@@ -232,24 +232,31 @@ function StoredResumeNotice({
   onDelete?: () => void;
   deleting?: boolean;
 }) {
+  // Mid-delete, the card stops being a click target for onView too — a click
+  // anywhere on it while the request is in flight should not navigate away
+  // from a resume that is about to disappear.
+  const clickable = Boolean(onView) && !deleting;
+
   return (
     <Card
-      onClick={onView}
-      role={onView ? "button" : undefined}
-      tabIndex={onView ? 0 : undefined}
+      onClick={clickable ? onView : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-disabled={deleting}
       onKeyDown={
-        onView
+        clickable
           ? (e: React.KeyboardEvent) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                onView();
+                onView?.();
               }
             }
           : undefined
       }
       className={cn(
         "mw-fade relative mt-6 p-4",
-        onView && "cursor-pointer transition-colors hover:bg-raised",
+        clickable && "cursor-pointer transition-colors hover:bg-raised",
+        deleting && "pointer-events-none opacity-60",
       )}
     >
       <div className="absolute top-4 right-4 flex items-center gap-1.5">
