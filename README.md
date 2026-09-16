@@ -71,7 +71,21 @@ The job listings feed adds three more, all optional — the app runs without the
 <p>
   <img src="https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white" />
   <img src="https://img.shields.io/badge/GitHub_Actions-Deploy_on_push-2088FF?style=flat-square&logo=githubactions&logoColor=white" />
+</p>
+
+### Static Analysis & Security Scanning
+
+Every one of these runs as a GitHub Action on pull requests, and every one of
+them can fail the build. Details, including what is deliberately suppressed and
+why, are in [Static analysis: what CI actually checks](#static-analysis-what-ci-actually-checks).
+
+<p>
+  <img src="https://img.shields.io/badge/Trivy-IaC_misconfiguration-1904DA?style=flat-square&logo=trivy&logoColor=white" />
+  <img src="https://img.shields.io/badge/Checkov-policy_as_code-6D28D9?style=flat-square&logo=bridgecrew&logoColor=white" />
+  <img src="https://img.shields.io/badge/TFLint-provider_linting-7B42BC?style=flat-square&logo=terraform&logoColor=white" />
+  <img src="https://img.shields.io/badge/terraform-fmt_%2B_validate-7B42BC?style=flat-square&logo=terraform&logoColor=white" />
   <img src="https://img.shields.io/badge/gitleaks-secret_scanning-EF4444?style=flat-square&logo=git&logoColor=white" />
+  <img src="https://img.shields.io/badge/ESLint-TypeScript-4B32C3?style=flat-square&logo=eslint&logoColor=white" />
 </p>
 
 ### External Data
@@ -281,7 +295,7 @@ sequenceDiagram
 
 ### Resume upload through context and career analysis
 
-Note the split at the end. **Agents 1 to 4 run in the POST the user waits on; agent 5 runs in a second request the results screen fires for itself.** Why: [Latency](#latency-why-agent-5-runs-separately).
+Note the split at the end. **Agents 1 to 4 run in the POST the user waits on; agent 5 runs in a second request the results screen fires for itself.** Why: [Latency](#latency-why-the-swapper-runs-separately).
 
 ```mermaid
 sequenceDiagram
@@ -941,6 +955,64 @@ node --test lambda/jobs-scraper/handler.test.js
 ### Styling
 
 Tailwind v4, configured entirely in `src/app/globals.css`. There is no `tailwind.config.js`. Colors are CSS custom properties on `:root`, mapped to utilities through `@theme inline`, so `bg-surface`, `text-ink-2`, `border-hairline` and friends resolve in both light and dark mode. Dark mode follows the OS setting and also honours an explicit `data-theme="dark"` stamp on `<html>`.
+
+---
+
+## Static analysis: what CI actually checks
+
+Two workflows do the scanning, and they answer different questions.
+[`verify-infra.yml`](.github/workflows/verify-infra.yml) asks whether the
+Terraform is well-formed and safely configured;
+[`secret-scan.yml`](.github/workflows/secret-scan.yml) asks whether a credential
+has leaked. Both gate pull requests.
+
+| Action | Tool | Asks | Fails the build on |
+|---|---|---|---|
+| [`hashicorp/setup-terraform@v3`](https://github.com/hashicorp/setup-terraform) | `terraform fmt` / `validate` | Is it canonical and internally consistent? | Any formatting drift, or a config that does not type-check |
+| [`terraform-linters/setup-tflint@v4`](https://github.com/terraform-linters/tflint) | TFLint | Is it valid for *this provider*? | Invalid instance types, deprecated arguments, bad ARNs — things `validate` cannot see |
+| [`aquasecurity/trivy-action@master`](https://github.com/aquasecurity/trivy-action) | Trivy (`scan-type: config`) | Is anything misconfigured? | `HIGH` or `CRITICAL` misconfigurations |
+| [`bridgecrewio/checkov-action@master`](https://github.com/bridgecrewio/checkov-action) | Checkov | Does it meet policy-as-code baselines? | Any failed check that is not explicitly skipped |
+| — (pinned binary, not an action) | [gitleaks](https://github.com/gitleaks/gitleaks) | Has a credential ever been committed? | A match in the **full** git history |
+
+ESLint and the Vitest suites run against the frontend rather than the
+infrastructure; see [Scripts](#scripts).
+
+### Suppressions are written down, not silent
+
+Both IaC scanners ship policy sets written for a regulated production estate.
+This project is one bucket of personal data, one bucket of public data, and a
+total inference budget of $20 — so some of those defaults cost real money to
+satisfy and buy nothing here, and one of them would make the product worse.
+
+Rather than lowering the severity threshold or soft-failing the job, every
+exception is recorded with a justification a reviewer can disagree with:
+
+| File | Scope | Holds |
+|---|---|---|
+| [`.trivyignore.yaml`](.trivyignore.yaml) | Path-scoped | `AWS-0132` on the jobs bucket only |
+| [`.checkov.yml`](.checkov.yml) | Project-wide | Checks that do not apply to a project this size, each with its reasoning |
+| `#checkov:skip=` comments | One resource | Exceptions that must not apply anywhere else |
+
+The split matters. A project-wide skip in `.checkov.yml` hides a check
+everywhere; an inline skip hides it on one resource and leaves it enforced on
+the rest. So `CKV_AWS_145` is suppressed on the public jobs bucket inline, and
+the uploads bucket losing its customer-managed key would still fail the build.
+Same reasoning puts `CKV_AWS_28` next to the unused `users` table rather than in
+the config file, so `resumes` and `analyses` still have to keep point-in-time
+recovery.
+
+Two of those decisions are worth stating outright, because they read as
+weakening the scan and are not:
+
+- **The jobs bucket uses SSE-S3, not a customer-managed key.** It holds one
+  object: a snapshot of postings scraped from a public, unauthenticated API. A
+  CMK would add rotation and decrypt auditing to data that is already on the
+  open web, at a standing monthly charge. The résumé bucket, which holds
+  personal data, does get one.
+- **S3 versioning is declined on privacy grounds, not cost.** Versioning the
+  uploads bucket would retain every superseded and deleted résumé as a
+  noncurrent version, so a user deleting their document would not actually
+  delete it. That is worse than the risk the check guards against.
 
 ---
 
