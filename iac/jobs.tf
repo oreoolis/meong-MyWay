@@ -36,6 +36,34 @@ resource "aws_s3_bucket_public_access_block" "jobs" {
   restrict_public_buckets = true
 }
 
+# SSE-S3, deliberately — not the customer-managed key the uploads bucket gets.
+#
+# Trivy's AWS-0132 wants a CMK on every bucket and is suppressed for this file
+# alone in .trivyignore.yaml. The argument: this bucket holds one object, a
+# snapshot of postings scraped from MyCareersFuture's *public*, unauthenticated
+# API. There is no confidentiality to protect — the source is on the open web —
+# so a CMK would buy key rotation and decrypt auditing for data that is public
+# by construction, at a standing monthly charge against a $20 project budget.
+#
+# Declared rather than left to the default so that choice is on the record. S3
+# would apply AES256 either way; what an empty file could not say is that
+# anybody weighed it.
+#
+# It is also the cheaper failure mode. SSE-KMS here would mean the scraper's
+# role needs kms:Decrypt and kms:GenerateDataKey, and `readPool` in handler.js
+# raises rather than degrading to an empty pool — so a missing grant would stop
+# the feed publishing rather than quietly weaken it.
+resource "aws_s3_bucket_server_side_encryption_configuration" "jobs" {
+  count  = local.jobs_enabled ? 1 : 0
+  bucket = aws_s3_bucket.jobs[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
 # Run archives are for debugging a bad snapshot, which stops being useful
 # quickly. `latest.json` sits outside the prefix and is never expired.
 resource "aws_s3_bucket_lifecycle_configuration" "jobs" {
