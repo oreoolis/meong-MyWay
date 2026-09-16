@@ -233,6 +233,7 @@ export function AnalysisStage({
   agentState,
   profile,
   error,
+  errorRetryable = true,
   onRetry,
   onStartOver,
   phase,
@@ -244,6 +245,8 @@ export function AnalysisStage({
   agentState: Record<AgentId, AgentCardState>;
   profile: ResumeProfile | null;
   error: string | null;
+  /** Whether retrying this failure is worth offering, rather than a dead end. */
+  errorRetryable?: boolean;
   onRetry: () => void;
   onStartOver?: () => void;
   /** Where the run currently is; drives the retro loading screen. */
@@ -290,10 +293,21 @@ export function AnalysisStage({
         >
           <p className="text-[14px] font-medium text-ink">The run stopped early</p>
           <p className="mt-1 text-[13px] text-ink-2">{error}</p>
-          <Button variant="secondary" size="sm" className="mt-3" onClick={onRetry}>
-            Try again
-          </Button>
-          {onStartOver ? <Button variant="ghost" size="sm" className="ml-2 mt-3" onClick={onStartOver}>Choose another résumé</Button> : null}
+          {errorRetryable ? (
+            <Button variant="secondary" size="sm" className="mt-3" onClick={onRetry}>
+              Try again
+            </Button>
+          ) : null}
+          {onStartOver ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn("mt-3", errorRetryable && "ml-2")}
+              onClick={onStartOver}
+            >
+              Choose another résumé
+            </Button>
+          ) : null}
         </div>
       ) : null}
 

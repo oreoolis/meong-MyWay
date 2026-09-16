@@ -46,7 +46,9 @@ export async function POST(request: Request) {
     }
 
     if (error instanceof AgentReasoningError) {
-      console.error(`[api/analysis/swap] ${error.agent} agent failed:`, error.cause);
+      // `cause` is `undefined` for a truncated or empty reply — `message`
+      // names that failure directly, so log both rather than lose it.
+      console.error(`[api/analysis/swap] ${error.agent} agent failed:`, error.message, error.cause);
       return authJson(
         {
           error: "The career swapper could not finish. Try again.",

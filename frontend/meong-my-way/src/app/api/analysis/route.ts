@@ -98,7 +98,11 @@ export async function POST(request: Request) {
       // (throttling, a malformed reply) and retrying often succeeds, whereas a
       // 500 reads as permanent.
       if (error instanceof AgentReasoningError) {
-        console.error(`[api/analysis] ${error.agent} agent failed:`, error.cause);
+        // `cause` is `undefined` for a truncated or empty reply — those are
+        // not a wrapped exception, they are `reason.ts` naming the failure
+        // itself in `message`. Logging both is what tells the two apart from
+        // a genuine Bedrock/network fault without guessing from silence.
+        console.error(`[api/analysis] ${error.agent} agent failed:`, error.message, error.cause);
         return authJson(
           { error: "The agents could not finish this run. Try again.", retryable: true },
           502,

@@ -70,6 +70,8 @@ export function Workspace() {
   /** Which results view is open. `null` is the fork itself. */
   const [branch, setBranch] = useState<ResultsBranch | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Whether `error` is worth a "Try again" button, rather than a dead end. */
+  const [errorRetryable, setErrorRetryable] = useState(true);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [deletingResume, setDeletingResume] = useState(false);
@@ -213,6 +215,8 @@ export function Workspace() {
       setBranch(null);
       setSwapState("idle");
       setError(null);
+    setErrorRetryable(true);
+      setErrorRetryable(true);
       setUploadError(null);
       setPhase("uploading");
       setBusy(true);
@@ -268,6 +272,7 @@ export function Workspace() {
           setStage("upload");
         } else {
           setError(message);
+          setErrorRetryable(isRetryableFailure(err));
         }
       } finally {
         if (abortRef.current === controller) setBusy(false);
@@ -299,6 +304,8 @@ export function Workspace() {
       setBranch(null);
       setSwapState("idle");
       setError(null);
+    setErrorRetryable(true);
+      setErrorRetryable(true);
       setUploadError(null);
       setStage("landing");
       pipelineCache.current = {};
@@ -315,6 +322,7 @@ export function Workspace() {
     setBranch(null);
     setSwapState(storedAnalysis.swap ? "done" : "idle");
     setError(null);
+    setErrorRetryable(true);
     setUploadError(null);
     setStage("results");
   }
@@ -357,6 +365,7 @@ export function Workspace() {
     setBranch(null);
     setSwapState("idle");
     setError(null);
+    setErrorRetryable(true);
     setUploadError(null);
     setStage("upload");
     setBusy(false);
@@ -369,6 +378,7 @@ export function Workspace() {
     abortRef.current?.abort();
     setBusy(false);
     setError(null);
+    setErrorRetryable(true);
     setUploadError(null);
     setStage("landing");
     requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
@@ -457,6 +467,7 @@ export function Workspace() {
             }}
             profile={analysis?.profile ?? null}
             error={error}
+            errorRetryable={errorRetryable}
             onRetry={() => file && void runPipeline(file)}
             onStartOver={handleStartOver}
             phase={phase}
@@ -541,4 +552,23 @@ function documentWasRejected(error: unknown): boolean {
     error !== null &&
     (error as { documentRejected?: unknown }).documentRejected === true
   );
+}
+
+/**
+ * Whether the analysis stage should offer "Try again" for this failure.
+ *
+ * `AnalysisRequestError` always carries a real `retryable` boolean — the server
+ * marks a Bedrock/AWS-side failure (throttling, a busy region, a truncated
+ * reply) `true`, and marks a permanent one (misconfiguration, a stale
+ * questionnaire, an unexpected 500) `false`. Blind-retrying the latter just
+ * wastes the user's time on something that will fail identically, so the
+ * button is only worth showing when the server actually said retrying helps.
+ *
+ * Defaults to `true` for anything without an explicit `retryable` field —
+ * an unexpected, untyped error is not proof retrying won't work.
+ */
+export function isRetryableFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return true;
+
+  return (error as { retryable?: unknown }).retryable !== false;
 }
