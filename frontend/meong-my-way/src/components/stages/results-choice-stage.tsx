@@ -1,10 +1,9 @@
 "use client";
 
 import type { AnalysisBundle, SwapRequestState } from "@/lib/contracts";
-import { Button, ProgressBar, SectionLabel } from "@/components/ui/primitives";
+import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ArrowRightIcon, RouteIcon, TrendUpIcon } from "@/components/ui/icons";
-import { SWAPPER_ESTIMATE_MS } from "@/lib/agents/timings";
-import { useEstimatedProgress } from "@/lib/use-estimated-progress";
+import { SkeletonBar } from "@/components/ui/agent-trace";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,8 +30,6 @@ type DoorProps = {
   disabledReason: string;
   /** Work is still running behind this door — dim it, but do not dishearten. */
   pending?: boolean;
-  /** 0–100, only read while `pending`. */
-  progress?: number;
   onSelect: () => void;
 };
 
@@ -44,7 +41,6 @@ function Door({
   disabled,
   disabledReason,
   pending = false,
-  progress = 0,
   onSelect,
 }: DoorProps) {
   return (
@@ -80,13 +76,8 @@ function Door({
 
       {pending ? (
         <div className="mt-6">
-          <ProgressBar
-            value={progress}
-            active
-            size="sm"
-            label="Career swapper progress"
-            hint={disabledReason}
-          />
+          <p className="mb-1.5 text-[12px] text-ink-2">{disabledReason}</p>
+          <SkeletonBar />
         </div>
       ) : (
         <p className="mt-6 flex items-center gap-2 text-[12.5px] text-ink-muted">
@@ -174,11 +165,6 @@ export function ResultsChoiceStage({
     (analysis.advice?.matchedRoles.length ?? 0) + analysis.plan.paths.length;
 
   const swapPending = swapState === "idle" || swapState === "loading";
-  const swapProgress = useEstimatedProgress({
-    active: swapPending,
-    done: swapState === "done" || swapState === "failed",
-    estimateMs: SWAPPER_ESTIMATE_MS,
-  });
 
   return (
     <div className="mw-rise mx-auto w-full max-w-4xl">
@@ -219,7 +205,6 @@ export function ResultsChoiceStage({
           disabled={transitionerDisabled}
           disabledReason={transitioner.disabledReason}
           pending={swapPending}
-          progress={swapProgress}
           onSelect={() => onChoose("transitioner")}
         />
       </div>
