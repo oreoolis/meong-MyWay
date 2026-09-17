@@ -1,7 +1,6 @@
 import "server-only";
 
 import type { ResumeProfile } from "@/lib/contracts";
-import type { SsgJobRole } from "@/lib/ssg/client";
 
 /**
  * Rendering the shared context each agent gets.
@@ -63,30 +62,7 @@ export function profileDigest(profile: ResumeProfile): string {
     .join("\n");
 }
 
-/**
- * Render framework roles for a prompt.
- *
- * The ID leads each line because the agents are asked to echo it back — it is
- * what lets the UI link an LLM-written rationale to a real framework role
- * rather than trusting the model to reproduce a title exactly.
- */
-export function jobRoleDigest(roles: SsgJobRole[]): string {
-  if (roles.length === 0) return "none found";
-
-  return roles
-    .map((role) => {
-      const salary =
-        role.salary?.minimum && role.salary?.maximum
-          ? ` | SGD ${role.salary.minimum}-${role.salary.maximum}/month`
-          : "";
-      const sector = role.sector?.title ? ` | sector: ${role.sector.title}` : "";
-      // One description line is enough to disambiguate a title; the framework
-      // sometimes carries several near-identical paragraphs.
-      const description = role.descriptions?.[0]
-        ? ` | ${role.descriptions[0].slice(0, 180)}`
-        : "";
-
-      return `[${role.id}] ${role.title}${sector}${salary}${description}`;
-    })
-    .join("\n");
-}
+// `jobRoleDigest` lived here. Both callers now search through `role-tools.ts`,
+// which renders each role as it is surfaced — the ID still leads the line, for
+// the same reason: it is what lets the UI link an LLM-written rationale to a
+// real framework role rather than trusting the model to reproduce a title.

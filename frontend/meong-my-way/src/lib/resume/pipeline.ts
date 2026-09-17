@@ -154,16 +154,27 @@ export async function runResumePipeline(
 
   /* --- The agents ------------------------------------------------------- */
 
+  /** Which card a thought belongs to when the server did not name one. */
+  const THOUGHT_OWNER: Partial<Record<string, AgentId>> = {
+    parsing: "parser",
+    planning: "planner",
+  };
+
   const reportPhase = (
     phase: import("@/lib/analysis/progress").AnalysisPhase,
     thought?: string,
+    agent?: string,
   ) => {
     if (signal.aborted || phase === "complete") return;
     // A thought is an update *within* a phase, never a transition into one.
     // Falling through would re-run the phase's transition on every thought and
-    // reset the step list the planner is already partway through.
+    // reset the step list the agent is already partway through.
     if (thought) {
-      events.onAgentThought("planner", thought);
+      // The specialists run concurrently, so `specialists` alone cannot say
+      // whose thought this is — those frames name their agent. A phase with
+      // one agent in it does not need to.
+      const owner = (agent as AgentId | undefined) ?? THOUGHT_OWNER[phase];
+      if (owner) events.onAgentThought(owner, thought);
       return;
     }
     events.onPhase(phase);

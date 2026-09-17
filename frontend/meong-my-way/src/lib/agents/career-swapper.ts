@@ -7,11 +7,11 @@ import type {
   EvidenceBasis,
   ResumeProfile,
 } from "@/lib/contracts";
-import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import { reasonJson, reasonJsonWithTools, type ModelUsage } from "@/lib/bedrock/reason";
 
 import { CAREER_COACHES } from "./coaches";
-import { jobRoleDigest, profileDigest } from "./digest";
-import { findRoles, lookupCompetencies, scoreRoles, type ScoredRole } from "./role-matching";
+import { profileDigest } from "./digest";
+import { roleToolkit } from "./role-tools";
 
 /**
  * Agent 5 — Career Swapper.
@@ -130,28 +130,29 @@ Guidance:
 function groundedPrompt(
   profile: ResumeProfile,
   currentSector: string,
-  scored: ScoredRole[],
-  portable: string[],
+  keywords: string[],
 ): string {
   return `Candidate profile:
 
 ${profileDigest(profile)}
 
-Their current sector: ${currentSector || "not identified"} — the destinations below are deliberately outside it.
+Their current sector: ${currentSector || "not identified"}. search_roles already excludes it, so everything it returns is a genuine move out.
 
-Skills Framework roles in other sectors, with match scores against their resume:
-${jobRoleDigest(scored.map((entry) => entry.role))}
+Search the Skills Framework for where this person could credibly go next, then
+name the best destinations. The planner suggested these title terms, but they
+are a suggestion and not a brief: ${keywords.join(", ") || "none — choose your own from the profile"}
 
-Match scores:
-${scored.map((entry) => `[${entry.role.id}] ${entry.score}`).join("\n")}
-
-${portable.length ? `Generic competencies the framework treats as transferable:\n${portable.join(", ")}` : ""}
+- Call search_roles with one title word at a time. It returns role ids, published
+  salary bands, and a match score against this résumé.
+- A keyword returning nothing means it was the wrong keyword. Try another.
+- Call lookup_competencies to find what the framework treats as transferable.
+- Three or four lookups is right. Then call emit_result.
 
 Reply with JSON matching exactly this shape:
 
-${destinationSchema("use the figures from the role data above.")}
-- "destinations": 3-4 of the roles listed above, most reachable first. "id" must be an [id] shown above.
-- "matchScore": use the score given for that [id].`;
+${destinationSchema("use the published band search_roles returned for that id.")}
+- "destinations": 3-4 of the roles you found, most reachable first. "id" must be an id search_roles returned. A role you did not look up cannot be named.
+- "matchScore": use the score search_roles gave that id.`;
 }
 
 function reasonedPrompt(
@@ -267,34 +268,34 @@ async function groundedSwaps(
   resumeVector: number[],
   currentSector: { id: string; title: string },
   adjacentKeywords: string[],
+  onThought?: (text: string) => void,
 ): Promise<SwapResult | null> {
-  if (adjacentKeywords.length === 0) return null;
+  // No keyword floor any more. The planner's `adjacentKeywords` are a starting
+  // point the model can ignore, so an empty list is a thinner prompt rather
+  // than a dead end — it still has the profile to search from.
+  const { tools, seen } = roleToolkit({
+    resumeVector,
+    // Searched framework-wide, then filtered, because the API takes sectors to
+    // include and offers no way to exclude one.
+    excludeSectorId: currentSector.id || undefined,
+    competencyKind: "generic",
+  });
 
-  // Searched framework-wide, then filtered, because the API takes sectors to
-  // include and offers no way to exclude one.
-  const { roles } = await findRoles(adjacentKeywords);
-
-  const outOfSector = currentSector.id
-    ? roles.filter((role) => role.sector?.id !== currentSector.id)
-    : roles;
-
-  if (outOfSector.length === 0) return null;
-
-  const [scored, portable] = await Promise.all([
-    scoreRoles(outOfSector, resumeVector),
-    lookupCompetencies(adjacentKeywords.slice(0, 4), "generic"),
-  ]);
-
-  if (scored.length === 0) return null;
-
-  const { value, usage } = await reasonJson<SwapperPayload>({
+  const { value, usage } = await reasonJsonWithTools<SwapperPayload>({
     agent: "swapper",
     system: GROUNDED_SYSTEM,
-    prompt: groundedPrompt(profile, currentSector.title, scored, portable),
+    prompt: groundedPrompt(profile, currentSector.title, adjacentKeywords),
+    tools,
+    maxTurns: 5,
+    onThought,
     maxTokens: DESTINATION_CEILING,
   });
 
-  const byId = new Map(scored.map((entry) => [entry.role.id, entry]));
+  // Nothing looked up means no framework evidence to ground against — the
+  // same outcome the old `outOfSector.length === 0` guard produced.
+  if (seen.size === 0) return null;
+
+  const byId = seen;
 
   // A destination the framework never offered is dropped rather than shown
   // with a fabricated salary band — in this tier the bands are presented as
@@ -321,7 +322,7 @@ async function groundedSwaps(
   if (destinations.length === 0) return null;
 
   return {
-    swap: assemble(destinations, value, "framework", outOfSector.length),
+    swap: assemble(destinations, value, "framework", seen.size),
     usage,
   };
 }
@@ -386,13 +387,18 @@ export async function findCareerSwaps(
   resumeVector: number[],
   currentSector: { id: string; title: string },
   adjacentKeywords: string[],
+  onThought?: (text: string) => void,
 ): Promise<SwapResult | null> {
   try {
+    // The tier-2 fallback this already had is also the tool loop's: a turn-cap
+    // hit or a framework outage throws, lands here, and becomes reasoned
+    // destinations rather than a failed agent.
     const grounded = await groundedSwaps(
       profile,
       resumeVector,
       currentSector,
       adjacentKeywords,
+      onThought,
     );
     if (grounded) return grounded;
 

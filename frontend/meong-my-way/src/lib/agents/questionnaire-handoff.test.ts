@@ -11,6 +11,11 @@ vi.mock("./resume-improver", () => m);
 vi.mock("./industry-advisor", () => m);
 vi.mock("./career-swapper", () => m);
 vi.mock("@/lib/ssg/oauth", () => ({ hasSsgCredentials: () => true }));
+// Both reach S3 for their pools. `.env.local` is loaded into the unit suite
+// (see vitest.config.mts), so unmocked they make real network calls and the
+// test fails on a timeout rather than on anything it is testing.
+vi.mock("@/lib/courses/recommendations", () => ({ withRecommendedCourses: async (p: unknown) => p }));
+vi.mock("@/lib/jobs/matching", () => ({ createJobMatcher: async () => null, withOpenings: (items: unknown) => items }));
 import { runAnalysis, runCareerSwap } from "./orchestrator";
 const resume = { userId: "u", resumeId: "r", format: "pdf" } as StoredResume;
 const parsed: ParseResult = {
@@ -33,7 +38,8 @@ it("passes enriched evidence to planner/advisor and preserves specialist partial
   expect(m.parseResume).not.toHaveBeenCalled();
   // Second argument is the planner's thought sink — see `PipelineProgress`.
   expect(m.planCareers).toHaveBeenCalledWith(parsed.profile, expect.any(Function));
-  expect(m.adviseOnIndustry).toHaveBeenCalledWith(parsed.profile, [0, 1], expect.anything(), expect.anything());
+  // Trailing argument is the advisor's thought sink, same as the planner's.
+  expect(m.adviseOnIndustry).toHaveBeenCalledWith(parsed.profile, [0, 1], expect.anything(), expect.anything(), expect.any(Function));
   expect(result.advice).toBeNull();
   expect(result.improvement.verdict).toBe("Useful");
   expect(result.swap).toBeNull();

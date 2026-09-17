@@ -31,7 +31,11 @@ export async function beginIntake(userId: string, resumeId: unknown, onProgress?
       let checkpoint = existing;
       if (!checkpoint) {
         onProgress?.("parsing");
-        const parsed = await parseResumeProfile(resume, await readResumeBytes(resume));
+        const parsed = await parseResumeProfile(
+          resume,
+          await readResumeBytes(resume),
+          thought => onProgress?.("parsing", thought, "parser"),
+        );
         // Persist parsing before generation so a recoverable generation/storage
         // error never requires re-reading the document on the next request.
         checkpoint = {
@@ -113,7 +117,7 @@ export async function completeIntake(userId: string, raw: unknown, onProgress?: 
     const parsed = reusableParseResult(stored) ?? await embedParsedResume(intake.parsed, evidence);
     parsed.usage = { inputTokens: parsed.usage.inputTokens + intake.generationUsage.inputTokens, outputTokens: parsed.usage.outputTokens + intake.generationUsage.outputTokens };
     const result = await runAnalysis(resume, onProgress ? event => {
-      if (event.phase === "planning" || event.phase === "specialists" || event.phase === "complete") onProgress(event.phase, "thought" in event ? event.thought : undefined);
+      if (event.phase === "planning" || event.phase === "specialists" || event.phase === "complete") onProgress(event.phase, "thought" in event ? event.thought : undefined, "agent" in event ? event.agent : undefined);
     } : undefined, { parsed, leaseToken: claimed.leaseToken!, expiresAt: intake.questionnaire.expiresAt });
     await saveIntake(userId, { ...claimed, result, leaseUntil: 0 }, claimed);
     return result;

@@ -8,13 +8,14 @@ import type {
   ResumeProfile,
   SkillGap,
 } from "@/lib/contracts";
-import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import { reasonJson, reasonJsonWithTools, type ModelUsage } from "@/lib/bedrock/reason";
 
 import { splitSkills } from "@/lib/jobs/matching";
 import { affirmedSkillNames } from "@/lib/resume/questionnaire";
 
-import { jobRoleDigest, profileDigest } from "./digest";
-import { findRoles, lookupCompetencies, scoreRoles, type ScoredRole } from "./role-matching";
+import { profileDigest } from "./digest";
+import type { ScoredRole } from "./role-matching";
+import { roleToolkit } from "./role-tools";
 
 /**
  * Agent 4 — Industry Advisor.
@@ -61,8 +62,7 @@ Rules:
 function groundedPrompt(
   profile: ResumeProfile,
   sectorTitle: string,
-  scored: ScoredRole[],
-  competencies: string[],
+  keywords: string[],
 ): string {
   return `Candidate profile:
 
@@ -70,13 +70,16 @@ ${profileDigest(profile)}
 
 Their sector: ${sectorTitle || "not identified"}
 
-Skills Framework roles in this sector, with match scores against their resume:
-${jobRoleDigest(scored.map((entry) => entry.role))}
+Search the Skills Framework for roles in this sector, then advise on the ones
+that fit. The planner suggested these title terms as a starting point, but they
+are a suggestion and not a brief: ${keywords.join(", ") || "none — choose your own from the profile"}
 
-Match scores:
-${scored.map((entry) => `[${entry.role.id}] ${entry.score}`).join("\n")}
-
-${competencies.length ? `Technical competencies the framework associates with these searches:\n${competencies.join(", ")}` : ""}
+- Call search_roles with one title word at a time. It returns role ids, published
+  salary bands, and a match score against this résumé.
+- A keyword returning nothing means it was the wrong keyword, not that the sector
+  is empty. Try another before giving up.
+- Call lookup_competencies when you need the framework's own name for a skill.
+- Three or four lookups is right. Then call emit_result.
 
 Reply with JSON matching exactly this shape:
 
@@ -95,7 +98,7 @@ Reply with JSON matching exactly this shape:
 
 Guidance:
 - "positioning": 2-3 sentences on where this candidate currently stands in this sector — seniority, and what differentiates them.
-- "matchedRoles": the 3-5 strongest from the list, best first. "id" must be an [id] shown above. "rationale" is one sentence on why their experience fits.
+- "matchedRoles": the 3-5 strongest roles you found, best first. "id" must be an id that search_roles returned. A role you did not look up cannot be named. "rationale" is one sentence on why their experience fits.
 - "strengths": 2-3 things this resume already evidences that this specific role needs. Name the skill or the experience, not a compliment.
 - "gaps": 2-4 things this specific role needs that this resume does not evidence, hardest-blocking first. This is the answer to "why is my match score not higher, and what do I do about it" — so "remedy" must be one concrete action with a named target (a certification, a kind of project, a tool to ship something real with, a number to put on the resume), never "gain more experience". "severity" is how much it blocks this move today: "critical" stops an application, "moderate" is a nice-to-have.
 - "skillsInDemand": competencies this sector expects that the resume does not evidence.
@@ -278,34 +281,47 @@ function assemble(
   };
 }
 
-/** Tier 1: real framework roles, ranked by the resume embedding. */
+/**
+ * Tier 1: real framework roles, ranked by the resume embedding.
+ *
+ * The searching is the model's now. It reads the profile, picks title words,
+ * sees the scored results, and searches again when a keyword comes back empty
+ * — which a fixed `findRoles(keywords)` could not do, so a bad planner keyword
+ * used to produce an empty candidate set indistinguishable from an empty
+ * sector. The retrieval itself is unchanged; only the choosing moved.
+ */
 async function groundedAdvice(
   profile: ResumeProfile,
   resumeVector: number[],
   sector: { id: string; title: string },
   keywords: string[],
+  onThought?: (text: string) => void,
 ): Promise<AdviceResult | null> {
-  const { roles } = await findRoles(keywords, { sector: sector.id });
-  if (roles.length === 0) return null;
+  const { tools, seen } = roleToolkit({
+    resumeVector,
+    sector: sector.id,
+    competencyKind: "technical",
+  });
 
-  const [scored, competencies] = await Promise.all([
-    scoreRoles(roles, resumeVector),
-    lookupCompetencies(keywords.slice(0, 4), "technical"),
-  ]);
-
-  if (scored.length === 0) return null;
-
-  const { value, usage } = await reasonJson<AdvisorPayload>({
+  const { value, usage } = await reasonJsonWithTools<AdvisorPayload>({
     agent: "advisor",
     system: GROUNDED_SYSTEM,
-    prompt: groundedPrompt(profile, sector.title, scored, competencies),
+    prompt: groundedPrompt(profile, sector.title, keywords),
+    tools,
+    maxTurns: 5,
+    onThought,
     maxTokens: 4096,
   });
+
+  // Nothing was ever looked up, so there is no framework evidence to ground
+  // against — the same outcome the old `roles.length === 0` guard produced,
+  // and `adviseOnIndustry` falls through to the reasoned tier.
+  if (seen.size === 0) return null;
 
   // Join the model's rationale back onto the framework's facts by ID. Anything
   // referencing an ID that was not offered is dropped — that is the guard
   // against a hallucinated role reaching the UI with a real-looking salary.
-  const byId = new Map(scored.map((entry) => [entry.role.id, entry]));
+  const byId = seen;
 
   const toSalary = (entry: ScoredRole) =>
     entry.role.salary?.minimum && entry.role.salary?.maximum
@@ -346,16 +362,19 @@ async function groundedAdvice(
       // the scores are real even when the commentary is missing.
       matchedRoles.length
         ? matchedRoles
-        : scored.slice(0, 3).map((entry) => ({
-            id: entry.role.id,
-            title: entry.role.title,
-            sector: entry.role.sector?.title ?? sector.title,
-            matchScore: entry.score,
-            salary: toSalary(entry),
-            rationale: "",
-          })),
+        : [...seen.values()]
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 3)
+            .map((entry) => ({
+              id: entry.role.id,
+              title: entry.role.title,
+              sector: entry.role.sector?.title ?? sector.title,
+              matchScore: entry.score,
+              salary: toSalary(entry),
+              rationale: "",
+            })),
       "framework",
-      roles.length,
+      seen.size,
     ),
     usage,
   };
@@ -421,9 +440,13 @@ export async function adviseOnIndustry(
   resumeVector: number[],
   sector: { id: string; title: string },
   keywords: string[],
+  onThought?: (text: string) => void,
 ): Promise<AdviceResult | null> {
   try {
-    const grounded = await groundedAdvice(profile, resumeVector, sector, keywords);
+    // The tier-2 fallback this already had is also the tool loop's. A turn-cap
+    // hit, a framework outage or a model that will not stop searching throws,
+    // lands here, and becomes reasoned advice rather than a failed agent.
+    const grounded = await groundedAdvice(profile, resumeVector, sector, keywords, onThought);
     if (grounded) return grounded;
 
     console.warn(

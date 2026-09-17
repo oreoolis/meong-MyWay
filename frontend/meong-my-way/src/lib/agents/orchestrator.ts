@@ -66,9 +66,9 @@ export type PipelineProgress = (
   event:
     | { phase: "parsing" }
     | { phase: "storing" }
-    /** `thought` carries the planner's live reasoning while its tool loop runs. */
+    /** `thought` carries an agent's live reasoning while its tool loop runs. */
     | { phase: "planning"; thought?: string }
-    | { phase: "specialists" }
+    | { phase: "specialists"; thought?: string; agent?: "improver" | "advisor" }
     | { phase: "complete" },
 ) => void;
 
@@ -253,8 +253,17 @@ export async function runAnalysis(
   }
 
   const specialists = Promise.allSettled([
-    (async () => improveResume(parsed.profile, planned.plan, await document))(),
-    adviseOnIndustry(parsed.profile, vector, planned.sector, planned.searchKeywords),
+    (async () =>
+      improveResume(parsed.profile, planned.plan, await document, (thought) =>
+        onProgress?.({ phase: "specialists", agent: "improver", thought }),
+      ))(),
+    adviseOnIndustry(
+      parsed.profile,
+      vector,
+      planned.sector,
+      planned.searchKeywords,
+      (thought) => onProgress?.({ phase: "specialists", agent: "advisor", thought }),
+    ),
   ]);
 
   // Openings and the plan write run alongside the specialists rather than in
