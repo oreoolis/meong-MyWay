@@ -1,6 +1,12 @@
 import "server-only";
 
-import type { AnalysisBundle, CareerPath, CareerSwap, RunCost, SkillGap } from "@/lib/contracts";
+import type {
+  AnalysisBundle,
+  CareerSwap,
+  RecommendedCourse,
+  RunCost,
+  SkillGap,
+} from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
 import { withRecommendedCourses } from "@/lib/courses/recommendations";
 import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
@@ -103,17 +109,25 @@ async function attachCourseRecommendations<
   }
 }
 
-function mergePathAttachments(
-  pathsWithOpenings: CareerPath[],
-  pathsWithCourses: CareerPath[],
-): CareerPath[] {
+/**
+ * Fold two independent attachments back onto one list.
+ *
+ * Openings and courses answer different questions and neither reads the
+ * other's output, so they are fetched concurrently and rejoined here by id
+ * rather than chained. Generic because the advisor's matched roles take the
+ * same pair as the planner's paths.
+ */
+function mergeAttachments<T extends { id: string; courses?: RecommendedCourse[] }>(
+  withOpeningsAttached: T[],
+  withCoursesAttached: T[],
+): T[] {
   const coursesById = new Map(
-    pathsWithCourses.map((path) => [path.id, path.courses] as const),
+    withCoursesAttached.map((item) => [item.id, item.courses] as const),
   );
 
-  return pathsWithOpenings.map((path) => {
-    const courses = coursesById.get(path.id);
-    return courses?.length ? { ...path, courses } : path;
+  return withOpeningsAttached.map((item) => {
+    const courses = coursesById.get(item.id);
+    return courses?.length ? { ...item, courses } : item;
   });
 }
 
@@ -286,7 +300,7 @@ export async function runAnalysis(
     ]);
     const plan = {
       ...planned.plan,
-      paths: mergePathAttachments(pathsWithOpenings, pathsWithCourses),
+      paths: mergeAttachments(pathsWithOpenings, pathsWithCourses),
     };
 
     await Promise.all([
@@ -339,11 +353,19 @@ export async function runAnalysis(
   //
   // Courses matter more here than on a path. "How to raise this match" names
   // what is missing; without them it cannot say what to actually enrol in.
+  //
+  // Concurrent, not chained. This is the last thing a run does, so anything
+  // serialised here lands directly on the wait: courses cost a round of gap
+  // embeddings and openings cost a round of posting embeddings, and neither
+  // reads the other's output.
   const adviceWithOpenings = advice
     ? {
         ...advice.advice,
-        matchedRoles: await attachCourseRecommendations(
-          await attachOpenings(advice.advice.matchedRoles),
+        matchedRoles: mergeAttachments(
+          ...(await Promise.all([
+            attachOpenings(advice.advice.matchedRoles),
+            attachCourseRecommendations(advice.advice.matchedRoles),
+          ])),
         ),
       }
     : null;
@@ -469,10 +491,7 @@ export async function runCareerSwap(userId: string): Promise<SwapRun | null> {
 
   const swap: CareerSwap = {
     ...result.swap,
-    destinations: mergePathAttachments(
-      destinationsWithOpenings,
-      destinationsWithCourses,
-    ),
+    destinations: mergeAttachments(destinationsWithOpenings, destinationsWithCourses),
   };
 
   await storeArtifact({
