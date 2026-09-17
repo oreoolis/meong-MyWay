@@ -325,6 +325,16 @@ export type MatchedRole = {
    * an analysis stored before this existed simply has none.
    */
   gaps?: SkillGap[];
+  /**
+   * SkillsFuture courses that close the gaps above.
+   *
+   * Attached by the same `withRecommendedCourses` the planner's paths use, so
+   * "how to raise this match" can answer with training someone can actually
+   * enrol in rather than only naming what is missing. Absent when no course
+   * cleared the semantic floor, which is an ordinary outcome — a remedy with
+   * no course behind it is still a real remedy.
+   */
+  courses?: RecommendedCourse[];
   /** Live vacancies for this role, best fit first. See `JobOpening`. */
   openings?: JobOpening[];
   /** What those openings collectively want that the resume lacks. */

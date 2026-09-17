@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { AnalysisBundle, CareerPath, CareerSwap, RunCost } from "@/lib/contracts";
+import type { AnalysisBundle, CareerPath, CareerSwap, RunCost, SkillGap } from "@/lib/contracts";
 import type { ModelUsage } from "@/lib/bedrock/reason";
 import { withRecommendedCourses } from "@/lib/courses/recommendations";
 import { createJobMatcher, withOpenings } from "@/lib/jobs/matching";
@@ -86,8 +86,15 @@ function sumUsage(entries: (ModelUsage | undefined)[]): ModelUsage {
   );
 }
 
-/** Courses enrich a plan but never decide whether the plan can be returned. */
-async function attachCourseRecommendations(paths: CareerPath[]): Promise<CareerPath[]> {
+/**
+ * Courses enrich a result but never decide whether it can be returned.
+ *
+ * Generic over the shape `withRecommendedCourses` actually reads, so the
+ * advisor's `MatchedRole` goes through the same path as a planner `CareerPath`.
+ */
+async function attachCourseRecommendations<
+  T extends { id: string; title: string; gaps?: SkillGap[] },
+>(paths: T[]): Promise<T[]> {
   try {
     return await withRecommendedCourses(paths);
   } catch (error) {
@@ -325,14 +332,19 @@ export async function runAnalysis(
   const advice =
     advisorOutcome.status === "fulfilled" ? advisorOutcome.value : null;
 
-  // The advisor's roles are the ones the UI shows openings against, so they
-  // get the same treatment as the planner's paths. Done after the agent
-  // returns rather than inside it: which roles suit this person is the
-  // model's judgement, which postings are those roles is not.
+  // The advisor's roles get the same two attachments as the planner's paths.
+  // Done after the agent returns rather than inside it: which roles suit this
+  // person is the model's judgement, which postings are those roles and which
+  // courses close its gaps are not.
+  //
+  // Courses matter more here than on a path. "How to raise this match" names
+  // what is missing; without them it cannot say what to actually enrol in.
   const adviceWithOpenings = advice
     ? {
         ...advice.advice,
-        matchedRoles: await attachOpenings(advice.advice.matchedRoles),
+        matchedRoles: await attachCourseRecommendations(
+          await attachOpenings(advice.advice.matchedRoles),
+        ),
       }
     : null;
 

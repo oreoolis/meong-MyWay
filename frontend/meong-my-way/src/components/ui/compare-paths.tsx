@@ -12,7 +12,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import type { CareerPath, PathKind, ResumeProfile } from "@/lib/contracts";
+import type { CareerPath, PathKind, RecommendedCourse, ResumeProfile } from "@/lib/contracts";
 import { cn, formatCompactMoney } from "@/lib/utils";
 import { Meter } from "./primitives";
 import { OpeningBadges, openingsLabel } from "./opening-badges";
@@ -63,10 +63,11 @@ function Chips({ items, tone }: { items: string[]; tone: "neutral" | "accent" })
   );
 }
 
-function CourseRecommendations({ path }: { path: CareerPath }) {
+/** Shared with the advisor's matched roles, which carry the same courses. */
+export function CourseRecommendations({ courses }: { courses: RecommendedCourse[] }) {
   return (
     <ol className={styles.courseList}>
-      {(path.courses ?? []).map((course, index) => (
+      {courses.map((course, index) => (
         <li key={course.referenceNumber} className={styles.courseItem}>
           <span className={styles.courseRank} aria-label={`Recommendation ${index + 1}`}>
             {String(index + 1).padStart(2, "0")}
@@ -152,7 +153,7 @@ const ROWS: Row[] = [
     label: "SkillsFuture Courses",
     Icon: GraduationCap,
     left: () => null,
-    right: (path) => <CourseRecommendations path={path} />,
+    right: (path) => <CourseRecommendations courses={path.courses ?? []} />,
   },
   {
     key: "route",

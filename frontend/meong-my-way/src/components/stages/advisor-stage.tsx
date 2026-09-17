@@ -14,7 +14,7 @@ import styles from "@/components/ui/career-workspace.module.css";
 
 import type { AnalysisBundle, MatchedRole, ResumeRewrite } from "@/lib/contracts";
 import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
-import { ComparePaths } from "@/components/ui/compare-paths";
+import { ComparePaths, CourseRecommendations } from "@/components/ui/compare-paths";
 import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
 import { SkillGapList } from "@/components/ui/skill-gap-list";
 import { SpecularButton } from "@/components/ui/specular-button";
@@ -52,31 +52,36 @@ function SuggestedRewrite({ text }: { text: string }) {
   });
 }
 
-type RoleDisclosureKey = "openings" | "rationale" | "guidance";
+type RoleDisclosureKey = "openings" | "rationale" | "guidance" | "courses";
 
 /**
- * The three things worth digging into for a matched role — vacancies, why it
- * fits, and how to raise the match — as a row of toggles instead of stacked
- * disclosures, so a role card reads as one scannable line. Independent
- * toggles, not tabs: any combination can be open at once, same as the
- * `<details>` elements this replaced.
+ * What is worth digging into for a matched role — vacancies, why it fits, how
+ * to raise the match, and the courses that would raise it — as a row of
+ * toggles instead of stacked disclosures, so a role card reads as one
+ * scannable line. Independent toggles, not tabs: any combination can be open
+ * at once, same as the `<details>` elements this replaced.
  *
- * Absent for a run stored before the advisor produced any of the three,
- * which is why each side is optional and the whole row disappears when
- * there is nothing truthful to put in it.
+ * Absent for a run stored before the advisor produced any of them, which is
+ * why each side is optional and the whole row disappears when there is nothing
+ * truthful to put in it.
  */
 function RoleDisclosures({ role }: { role: MatchedRole }) {
   const strengths = role.strengths ?? [];
   const gaps = role.gaps ?? [];
   const openings = role.openings ?? [];
+  const courses = role.courses ?? [];
 
   const hasOpenings = openings.length > 0;
   const hasRationale = Boolean(role.rationale);
   const hasGuidance = strengths.length > 0 || gaps.length > 0;
+  // Its own toggle rather than a section inside "how to raise this match":
+  // that panel names what is missing, this one is what to enrol in, and
+  // someone who already knows their gaps wants the second without the first.
+  const hasCourses = courses.length > 0;
 
   const [open, setOpen] = useState<Set<RoleDisclosureKey>>(new Set());
 
-  if (!hasOpenings && !hasRationale && !hasGuidance) return null;
+  if (!hasOpenings && !hasRationale && !hasGuidance && !hasCourses) return null;
 
   const toggle = (key: RoleDisclosureKey) =>
     setOpen((prev) => {
@@ -147,6 +152,19 @@ function RoleDisclosures({ role }: { role: MatchedRole }) {
             How to raise this match
           </SpecularButton>
         ) : null}
+
+        {hasCourses ? (
+          <SpecularButton
+            size="sm"
+            radius={999}
+            aria-expanded={open.has("courses")}
+            aria-controls={panelId("courses")}
+            onClick={() => toggle("courses")}
+            {...toneFor("courses")}
+          >
+            {courses.length === 1 ? "1 course to close it" : `${courses.length} courses to close it`}
+          </SpecularButton>
+        ) : null}
       </div>
 
       {hasOpenings && open.has("openings") ? (
@@ -195,6 +213,18 @@ function RoleDisclosures({ role }: { role: MatchedRole }) {
               </div>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {hasCourses && open.has("courses") ? (
+        <div id={panelId("courses")} className={styles.inlineDetailBody}>
+          <p className="text-[12.5px] leading-relaxed text-ink-muted">
+            SkillsFuture courses matched to the gaps above. Each lists the gap it
+            answers.
+          </p>
+          <div className="mt-3">
+            <CourseRecommendations courses={courses} />
+          </div>
         </div>
       ) : null}
     </>
