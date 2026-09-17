@@ -7,7 +7,7 @@ import type { CoursePool } from "./types";
 
 /**
  * Read-only access to the SkillsFuture course pool the Lambda in
- * `lambda/courses-scraper/` writes every 24 hours.
+ * `lambda/courses-scraper/` writes every 7 days.
  *
  * The same shape as `jobs/store.ts` — one shared, non-personal object, nothing
  * to authenticate against — with one difference: this object is large. Every
@@ -18,7 +18,7 @@ import type { CoursePool } from "./types";
 /**
  * How long a fetched pool is served from memory.
  *
- * The scraper publishes daily, so anything under a day is fresh enough; the
+ * The scraper publishes weekly, so anything under a week is fresh enough; the
  * ceiling here is about a keyword-list edit or a manual re-run reaching the
  * app within the hour rather than at the next deploy.
  *
