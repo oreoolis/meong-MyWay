@@ -330,9 +330,9 @@ export function AnalysisStage({
               state={traceState(storageSteps)}
             />
             <Trunk flowing={traceState(storageSteps) === "done"} carrying={carrying.toParser} className="h-14" />
-            <AgentNode agent="parser" steps={parserSteps} state={parserState} />
+            <AgentNode agent="parser" steps={parserSteps} state={parserState} thoughts={agentThoughts?.parser} />
             <Trunk flowing={parserState === "done"} carrying={carrying.toQuestionnaire} className="h-12" />
-            <AgentNode agent="context" steps={agentSteps.context} state={agentState.context} />
+            <AgentNode agent="context" steps={agentSteps.context} state={agentState.context} thoughts={agentThoughts?.context} />
           </>
         ) : null}
         {!preparingContext ? (
@@ -361,6 +361,7 @@ export function AnalysisStage({
                   agent={agent}
                   steps={downstreamQueued ? [] : agentSteps[agent]}
                   state={downstreamQueued ? "idle" : agentState[agent]}
+                  thoughts={agentThoughts?.[agent]}
                   className={downstreamQueued ? "grayscale" : undefined}
                 />
               ))}
