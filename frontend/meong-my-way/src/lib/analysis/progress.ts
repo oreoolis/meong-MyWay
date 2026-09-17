@@ -1,6 +1,10 @@
 export type AnalysisPhase = "parsing" | "context" | "embedding" | "planning" | "specialists" | "complete";
-/** Second argument is live agent commentary: never load-bearing, always optional. */
-export type ProgressReporter = (phase: AnalysisPhase, thought?: string) => void;
+/**
+ * `thought` is live agent commentary and `agent` says whose card it belongs to.
+ * Both optional, neither load-bearing: a phase frame without them is the
+ * ordinary transition every agent still emits.
+ */
+export type ProgressReporter = (phase: AnalysisPhase, thought?: string, agent?: string) => void;
 
 /** Optional NDJSON transport; ordinary API callers retain the JSON response. */
 export function progressResponse(request: Request, run: (report?: ProgressReporter) => Promise<Response>): Promise<Response> | Response {
@@ -13,7 +17,7 @@ export function progressResponse(request: Request, run: (report?: ProgressReport
         if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
       };
       try {
-        const result = await run((phase, thought) => send({ type: "phase", phase, thought }));
+        const result = await run((phase, thought, agent) => send({ type: "phase", phase, thought, agent }));
         send({ type: "result", status: result.status, body: await result.json() });
       } catch {
         send({ type: "result", status: 502, body: { error: "The agents could not finish. Try again.", retryable: true } });

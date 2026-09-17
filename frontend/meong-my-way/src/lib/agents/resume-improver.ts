@@ -6,7 +6,13 @@ import type {
   ResumeProfile,
   ResumeRewrite,
 } from "@/lib/contracts";
-import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import {
+  reasonJson,
+  reasonJsonWithTools,
+  type AgentTool,
+  type ModelUsage,
+} from "@/lib/bedrock/reason";
+import { getLatestJobs } from "@/lib/jobs/store";
 import { uniqueResumeRewrites } from "@/lib/resume/rewrites";
 
 import { profileDigest } from "./digest";
@@ -64,6 +70,56 @@ Guidance:
 - "formattingNotes": 0-3 notes on structure, length, or ordering. Omit if the layout is fine.`;
 }
 
+/**
+ * The improver's one lookup.
+ *
+ * `missingKeywords` is keyword advice with nothing behind it — the model's
+ * guess at what a target role expects, which the candidate is then told to put
+ * on their résumé. The jobs pool is a week of real Singapore postings, so
+ * "does anyone actually ask for this" is answerable rather than assertable.
+ *
+ * Inline rather than in its own module: one tool, one caller. `role-tools.ts`
+ * earned a file because two agents share it.
+ */
+const keywordDemand: AgentTool = {
+  name: "check_keyword_demand",
+  description:
+    "Count how many live Singapore job postings ask for a skill or keyword. Use this " +
+    "before telling the candidate to add a keyword to their résumé.",
+  schema: {
+    type: "object",
+    properties: {
+      keyword: { type: "string", description: "One skill or tool, e.g. 'Terraform'." },
+    },
+    required: ["keyword"],
+  },
+  narrate: (input) => `Checking how many postings ask for "${String(input.keyword)}"`,
+  run: async (input) => {
+    const raw = input.keyword;
+    if (typeof raw !== "string" || raw.trim().length < 2) {
+      return "Give a keyword of at least two characters.";
+    }
+    const keyword = raw.trim().slice(0, 60).toLowerCase();
+
+    const snapshot = await getLatestJobs();
+    if (!snapshot?.jobs?.length) return "Live postings are unavailable. Advise without them.";
+
+    // ponytail: substring match over title and key skills, not a tokenizer.
+    // "SQL" matching "NoSQL" is the known cost; a real analyzer is the upgrade
+    // if the counts ever drive more than prose advice.
+    const hits = snapshot.jobs.filter(
+      (job) =>
+        job.title?.toLowerCase().includes(keyword) ||
+        job.skills.some((skill) => skill.toLowerCase().includes(keyword)),
+    ).length;
+
+    if (hits === 0) {
+      return `0 of ${snapshot.jobs.length} postings mention it. Do not tell them to add this keyword.`;
+    }
+    return `${hits} of ${snapshot.jobs.length} live postings ask for it.`;
+  },
+};
+
 type ImproverPayload = Partial<ResumeImprovement>;
 
 const IMPACTS = new Set(["high", "medium", "low"]);
@@ -96,13 +152,32 @@ export async function improveResume(
   profile: ResumeProfile,
   plan: CareerPlan,
   document: { format: "pdf" | "docx"; bytes: Uint8Array },
+  onThought?: (text: string) => void,
 ): Promise<ImproveResult> {
-  const { value, usage } = await reasonJson<ImproverPayload>({
+  const prompt = buildPrompt(profile, plan);
+
+  // Tools first, then the original single-shot call. The improver is allowed to
+  // fail individually — `runAnalysis` settles the specialists — but a critique
+  // built without a keyword count is better than no critique, so a loop failure
+  // degrades rather than propagating.
+  const { value, usage } = await reasonJsonWithTools<ImproverPayload>({
     agent: "improver",
     system: SYSTEM,
-    prompt: buildPrompt(profile, plan),
+    prompt: `${prompt}\n\nBefore you put a term in "missingKeywords", call check_keyword_demand on it. Drop any term no posting asks for. Two or three checks is right, then call emit_result.`,
     document,
+    tools: [keywordDemand],
+    maxTurns: 4,
+    onThought,
     maxTokens: 3072,
+  }).catch(async (error) => {
+    console.warn("[improver] tool loop failed, falling back to single-shot:", error);
+    return reasonJson<ImproverPayload>({
+      agent: "improver",
+      system: SYSTEM,
+      prompt,
+      document,
+      maxTokens: 3072,
+    });
   });
 
   const improvement: ResumeImprovement = {

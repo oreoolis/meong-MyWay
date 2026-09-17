@@ -29,7 +29,10 @@
   <img src="https://img.shields.io/badge/Amazon_Bedrock-Converse_API-8C4FFF?style=flat-square&logo=amazonaws&logoColor=white" />
   <img src="https://img.shields.io/badge/Claude_Haiku_4.5-reasoning-D97757?style=flat-square&logo=anthropic&logoColor=white" />
   <img src="https://img.shields.io/badge/Titan_Embeddings_V2-1024d_vectors-232F3E?style=flat-square&logo=amazonaws&logoColor=white" />
+  <img src="https://img.shields.io/badge/Tool_use-bounded_agentic_loop-8C4FFF?style=flat-square&logo=anthropic&logoColor=white" />
 </p>
+
+Five of the six agents run a bounded tool loop and choose their own lookups; the pipeline around them stays a fixed DAG. See [why five agents choose their own lookups, and the pipeline does not](#why-five-agents-choose-their-own-lookups-and-the-pipeline-does-not).
 
 ### AWS Services
 
@@ -256,6 +259,36 @@ One run against a real resume produced 19 correct `"evidence":` keys and one tha
 
 The schema inside that tool is deliberately permissive. Each agent already normalises what it gets and pins its real shape in its own prompt; declaring five full JSON schemas here would duplicate that and then drift from it. What is wanted from the schema is well-formedness, not validation.
 
+### Why five agents choose their own lookups, and the pipeline does not
+
+Two different questions get two different answers here, and conflating them is the usual way an "agentic" system becomes slow and unpredictable for nothing.
+
+**The pipeline is a fixed DAG, deliberately.** The parser must run before the planner because the planner reads its profile; the specialists must run after the planner because they read its plan. That ordering is a data dependency, not a judgement, so there is nothing for a supervisor agent to decide. Paying a model to rediscover `a → b` on every run would add latency and cost and occasionally get it wrong. `orchestrator.ts` stays ordinary TypeScript.
+
+**Retrieval is a real choice, so the model makes it.** Five of the six agents now run a bounded tool loop (`reasonJsonWithTools` in `lib/bedrock/reason.ts`): the agent's own tools are offered alongside the forced `emit_result` shape with `toolChoice: auto`, and the model decides whether it has enough to answer or needs to look something up first.
+
+What that fixed, concretely — each of these was a guess the code presented as a fact:
+
+- **The planner invented job titles and salary bands.** `searchKeywords` and `adjacentKeywords` feed the advisor, the swapper and the job matcher, and nothing checked that the titles existed. A hallucinated title meant three downstream agents searching for something the taxonomy had never heard of, which looks identical to "no matches found". Salary was worse: the planner asserted bands while the Industry Advisor's own prompt refuses to, on the grounds that there is no honest way to reason one out. It now calls `find_job_role` and takes the framework's published figure.
+- **The advisor and swapper searched on whatever the planner guessed.** Both already did this retrieval — `findRoles`, `scoreRoles`, `lookupCompetencies` — with TypeScript passing in planner keywords and no way to notice a keyword returning nothing. The same functions are now `search_roles` and `lookup_competencies` (`lib/agents/role-tools.ts`), so a keyword that comes back empty is a fact the model can see and act on rather than an empty candidate set it never learns about.
+- **The improver told people to add keywords nobody was hiring for.** `missingKeywords` was the model's guess at what a target role expects. `check_keyword_demand` counts them against a week of real Singapore postings from the jobs pool.
+- **The parser named skills the résumé's way, not the framework's.** Those names flow into questionnaire evidence and job matching, where spelling has to line up. `check_skill_name` gets the framework's wording, advisory only — a résumé is allowed to contain a skill Singapore has not catalogued.
+
+The Questionnaire Agent has no tools and is not missing any. Its questions come from the profile alone, so there is nothing external to verify, and giving it a tool to justify the pattern would be the mock this whole change exists to remove.
+
+**Every loop can fail without costing the run.** The turn cap (4, or 5 for the two market agents) is a cost ceiling, and reaching it throws rather than returning a half-finished answer. Each agent falls back to exactly the single-shot call it made before:
+
+| Agent | Fallback on a loop failure |
+|---|---|
+| Parser | `reasonJson` with the original prompt. A `DocumentRejectedError` is re-thrown rather than retried — the same file fails the same way every time |
+| Planner | `reasonJson` with the original prompt, minus tool guidance |
+| Improver | `reasonJson` with the original prompt |
+| Advisor / Swapper | Their existing tier-2 reasoned path, which already existed for a framework outage |
+
+So a Skills Framework outage, a Bedrock throttle, or a model that will not stop searching costs accuracy, never the analysis.
+
+**Cost.** The advisor and swapper barely move: they fetched those roles either way, so only the turns are new. The parser, planner and improver add lookups that were not there before. Measured ceiling is roughly $0.12–0.18 per run against ~$0.05 before, which keeps a $20 budget over 100 runs. ADR-0002's arithmetic is unchanged in kind.
+
 ### Why the normalisation code stays
 
 Every agent clamps confidences, defaults enum fields, and drops rewrites that do not quote the resume. ADR-0001 introduced this as "the tax for the price point", which made it look removable once the price point went up.
@@ -391,14 +424,14 @@ sequenceDiagram
 
 ## The six agents
 
-| # | Agent | File | Reads | Produces |
-|---|-------|------|-------|----------|
-| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes, then validated questionnaire answers | Parsed profile at intake; refined summary and final Titan embedding after questionnaire submission |
-| 2 | Questionnaire Agent | `lib/agents/resume-context.ts` | Parsed profile | Two to three reviewed questions and token usage |
-| 3 | Career Planner | `lib/agents/career-planner.ts` | The profile | `CareerPlan`: current trajectory and ranked paths |
-| 4 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | Quoted, line-level rewrites with impact ratings |
-| 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector, SSG-WSG roles | Roles inside the current sector, ranked by fit |
-| 6 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, adjacent-sector roles | Pivot destinations, portable skills, coach referrals |
+| # | Agent | File | Reads | Tools | Produces |
+|---|-------|------|-------|-------|----------|
+| 1 | Resume Parser | `lib/agents/resume-parser.ts` | Raw PDF/DOCX bytes, then validated questionnaire answers | `check_skill_name` | Parsed profile at intake; refined summary and final Titan embedding after questionnaire submission |
+| 2 | Questionnaire Agent | `lib/agents/resume-context.ts` | Parsed profile | — | Two to three reviewed questions and token usage |
+| 3 | Career Planner | `lib/agents/career-planner.ts` | The profile | `find_job_role`, `find_courses` | `CareerPlan`: current trajectory and ranked paths |
+| 4 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | `check_keyword_demand` | Quoted, line-level rewrites with impact ratings |
+| 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector | `search_roles`, `lookup_competencies` | Roles inside the current sector, ranked by fit |
+| 6 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, current sector | `search_roles`, `lookup_competencies` | Pivot destinations, portable skills, coach referrals |
 
 Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 4 and 5 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 6 sits deliberately outside that fan-out.
 
@@ -694,7 +727,11 @@ The tab strip is hand-rolled rather than pulled from a component library, becaus
 
 Two different bars, because two different things are known.
 
-**Agent cards** derive from real state: `done / total` steps, with a running step counting **half**. Half is not a claim about the step's internals, since nothing reports those. It is what stops the bar freezing for a whole step and then jumping a third at once.
+**Agent cards** show a bar only where there is a real value to show. Idle is 0, done is 100, and a *running* agent gets a skeleton bar — track plus travelling highlight, no percentage.
+
+It used to compute one: `done / total` steps with a running step counting half. That number had nothing behind it. Nothing reports a step's internal progress, so "half" was a shape chosen to stop the bar freezing, dressed up as a measurement. A card now says "working" without also claiming to know how nearly done it is.
+
+The thing worth watching during a run moved to `react-rotating-text` in each card: **what the agent is actually doing**, typed out line by line. Those lines are the agents' real tool calls — "Checking whether 'Growth Ops Lead' is a real job title", "Searching the Skills Framework for 'Analyst' roles" — streamed over the same NDJSON channel as the phase events (`lib/analysis/progress.ts`), tagged with the agent they belong to so concurrent specialists land in the right card. The Questionnaire Agent shows none, because it makes no lookups and inventing some would be the same lie in a different widget.
 
 **The career swapper** is a single round trip that reports nothing between "started" and "finished", so `useEstimatedProgress` projects from the measured ~32s (`lib/agents/timings.ts`). Two rules keep the projection honest:
 
@@ -928,7 +965,7 @@ frontend/meong-my-way/src/
 └── lib/
     ├── contracts.ts       # shared types, the agent/API contract
     ├── use-estimated-progress.ts  # projected progress for work that reports none
-    ├── agents/            # the 5 agents + orchestrator + cost estimator
+    ├── agents/            # the 6 agents, their tools, orchestrator + cost estimator
     │                       # + coaches.ts: verified career services, not model output
     │                       # + timings.ts: measured durations the UI estimates against
     ├── bedrock/           # Converse wrapper (reason.ts) + embeddings.ts

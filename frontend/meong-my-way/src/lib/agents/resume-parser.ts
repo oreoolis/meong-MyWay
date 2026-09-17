@@ -2,11 +2,21 @@ import "server-only";
 
 import type { ExtractedSkill, ResumeProfile } from "@/lib/contracts";
 import { embedResumeText, type ResumeEmbedding } from "@/lib/bedrock/embeddings";
-import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import {
+  reasonJson,
+  reasonJsonWithTools,
+  type AgentTool,
+  type ModelUsage,
+} from "@/lib/bedrock/reason";
 import {
   DocumentRejectedError,
   resumeContentProblem,
 } from "@/lib/resume/file-policy";
+import {
+  autocompleteGenericSkills,
+  autocompleteTechnicalSkills,
+  stripHighlight,
+} from "@/lib/ssg/client";
 import type { StoredResume } from "@/lib/resume/types";
 import type { ParsedResume, QuestionnaireEvidence } from "@/lib/resume/questionnaire-types";
 import { enrichedEmbeddingText } from "@/lib/resume/questionnaire";
@@ -196,18 +206,87 @@ function synthesiseEmbeddingText(payload: ParserPayload): string {
     .join("\n");
 }
 
+/**
+ * The parser's one lookup.
+ *
+ * Skill names this agent extracts are not display text — they flow into
+ * `affirmedSkillNames`, the questionnaire, and job matching, where a résumé's
+ * own spelling ("AWS Lambda", "lambda functions", "serverless") and the
+ * framework's spelling have to line up. Naming a skill the way the Skills
+ * Framework names it is what makes that join work.
+ *
+ * Advisory only: the model is told to prefer the framework's wording, never to
+ * drop a skill the framework has not published. A résumé is allowed to contain
+ * a skill Singapore has not catalogued.
+ */
+const skillVocabulary: AgentTool = {
+  name: "check_skill_name",
+  description:
+    "Look up how Singapore's Skills Framework names a skill. Use it when a résumé's " +
+    "wording for a skill may not be the standard one.",
+  schema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "The skill as the résumé writes it." },
+    },
+    required: ["name"],
+  },
+  narrate: (input) => `Checking the standard name for "${String(input.name)}"`,
+  run: async (input) => {
+    const raw = input.name;
+    if (typeof raw !== "string" || raw.trim().length < 3) {
+      return "Give a skill name of at least three characters.";
+    }
+    const name = raw.trim().slice(0, 60);
+
+    const [technical, generic] = await Promise.all([
+      autocompleteTechnicalSkills(name).catch(() => []),
+      autocompleteGenericSkills(name).catch(() => []),
+    ]);
+
+    const found = [...technical, ...generic]
+      .map((code) => stripHighlight(code.description))
+      .slice(0, 5);
+
+    return found.length > 0
+      ? found.join("\n")
+      : "The framework publishes nothing under that name. Keep the résumé's own wording.";
+  },
+};
+
 export async function parseResumeProfile(
   resume: StoredResume,
   bytes: Uint8Array,
+  onThought?: (text: string) => void,
 ): Promise<ParsedResume> {
-  const { value, usage } = await reasonJson<ParserPayload>({
+  // Generous: a dense resume with 20 skills and six roles is a long object,
+  // and a truncated reply costs a full retry.
+  const base = {
     agent: "parser",
     system: SYSTEM,
-    prompt: PROMPT,
     document: { format: resume.format, bytes },
-    // Generous: a dense resume with 20 skills and six roles is a long object,
-    // and a truncated reply costs a full retry.
     maxTokens: 4096,
+  } as const;
+
+  // Tools first, then the original single-shot call.
+  //
+  // The parser is the one agent with no tier below it: `beginIntake` blocks on
+  // it and the whole run stops if it throws, so the loop is never the only way
+  // to get a profile. A framework outage or a turn-cap hit costs skill-name
+  // normalisation, never the parse.
+  const { value, usage } = await reasonJsonWithTools<ParserPayload>({
+    ...base,
+    prompt: `${PROMPT}\n\nFor the two or three skills whose résumé wording looks non-standard, call check_skill_name and use the framework's wording in "skills". Keep the résumé's own wording when the framework publishes nothing. Do not check skills already named plainly. Then call emit_result.`,
+    tools: [skillVocabulary],
+    maxTurns: 4,
+    onThought,
+  }).catch(async (error) => {
+    // A rejected document is the user's problem and identical on every
+    // attempt — re-running it single-shot would spend a second model call to
+    // reach the same answer.
+    if (error instanceof DocumentRejectedError) throw error;
+    console.warn("[parser] tool loop failed, falling back to single-shot:", error);
+    return reasonJson<ParserPayload>({ ...base, prompt: PROMPT });
   });
 
   const skills = (value.skills ?? [])
