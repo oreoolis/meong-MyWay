@@ -207,11 +207,13 @@ function AgentNode({
   agent,
   steps,
   state,
+  thoughts,
   className,
 }: {
   agent: AgentId;
   steps: AgentStep[];
   state: AgentCardState;
+  thoughts?: string[];
   className?: string;
 }) {
   const meta = AGENT_META[agent];
@@ -223,6 +225,7 @@ function AgentNode({
       icon={meta.icon}
       steps={steps}
       state={state}
+      thoughts={thoughts}
       className={className}
     />
   );
@@ -231,6 +234,7 @@ function AgentNode({
 export function AnalysisStage({
   agentSteps,
   agentState,
+  agentThoughts,
   profile,
   error,
   errorRetryable = true,
@@ -243,6 +247,8 @@ export function AnalysisStage({
 }: {
   agentSteps: Record<AgentId, AgentStep[]>;
   agentState: Record<AgentId, AgentCardState>;
+  /** Live agent reasoning, keyed by agent. Only the planner ever has any. */
+  agentThoughts?: Partial<Record<AgentId, string[]>>;
   profile: ResumeProfile | null;
   error: string | null;
   /** Whether retrying this failure is worth offering, rather than a dead end. */
@@ -334,6 +340,7 @@ export function AnalysisStage({
             agent="planner"
             steps={downstreamQueued ? [] : agentSteps.planner}
             state={downstreamQueued ? "idle" : agentState.planner}
+            thoughts={agentThoughts?.planner}
             className={downstreamQueued ? "grayscale" : undefined}
           />
         ) : null}

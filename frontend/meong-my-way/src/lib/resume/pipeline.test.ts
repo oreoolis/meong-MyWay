@@ -43,16 +43,21 @@ const STORED: StoredResume = {
 function recorder() {
   const announced: AgentId[] = [];
   const phases: string[] = [];
+  const thoughts: string[] = [];
 
   return {
     announced,
     phases,
+    thoughts,
     events: {
       onIntake: vi.fn(),
       onQuestionnaire: vi.fn(),
       onAgentSteps: (agent: AgentId, steps: AgentStep[]) => {
         void steps;
         if (!announced.includes(agent)) announced.push(agent);
+      },
+      onAgentThought: (agent: AgentId, thought: string) => {
+        thoughts.push(`${agent}: ${thought}`);
       },
       onStorageSteps: () => {},
       onPhase: (phase: string) => phases.push(phase),

@@ -215,7 +215,7 @@ export async function readProgressResponse<T>(response: Response, onProgress?: P
         pending = pending.slice(boundary + 1);
         if (!line.trim()) continue;
         const frame = JSON.parse(line);
-        if (frame.type === "phase" && ["parsing", "context", "embedding", "planning", "specialists", "complete"].includes(frame.phase)) onProgress?.(frame.phase);
+        if (frame.type === "phase" && ["parsing", "context", "embedding", "planning", "specialists", "complete"].includes(frame.phase)) onProgress?.(frame.phase, typeof frame.thought === "string" ? frame.thought : undefined);
         if (frame.type === "result") {
           if (frame.status >= 400) throw await failure(new Response(JSON.stringify(frame.body), { status: frame.status }));
           return frame.body as T;

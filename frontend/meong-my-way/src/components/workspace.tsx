@@ -63,6 +63,7 @@ export function Workspace() {
   const [storageSteps, setStorageSteps] = useState<AgentStep[]>([]);
   const [agentSteps, setAgentSteps] =
     useState<Record<AgentId, AgentStep[]>>(NO_STEPS);
+  const [agentThoughts, setAgentThoughts] = useState<Partial<Record<AgentId, string[]>>>({});
   const [phase, setPhase] = useState<PipelinePhase>("uploading");
   const [storedResume, setStoredResume] = useState<StoredResume | null>(null);
   const [storedAnalysis, setStoredAnalysis] = useState<AnalysisBundle | null>(null);
@@ -153,6 +154,20 @@ export function Workspace() {
   }, []);
 
   /**
+   * Append one line of an agent's live reasoning.
+   *
+   * Capped because the list is a rotation, not a transcript: past about six
+   * lines the oldest would not come round again before the agent finished, and
+   * the card would type out reasoning that is no longer happening.
+   */
+  const reportThought = useCallback((agent: AgentId, thought: string) => {
+    setAgentThoughts((prev) => ({
+      ...prev,
+      [agent]: [...(prev[agent] ?? []), thought].slice(-6),
+    }));
+  }, []);
+
+  /**
    * Start the career swapper.
    *
    * Called when the results fork first renders rather than when the
@@ -214,6 +229,7 @@ export function Workspace() {
       setStorageSteps([]);
       setChatRun((value) => value + 1);
       setAgentSteps(NO_STEPS);
+      setAgentThoughts({});
       setAnalysis(null);
       setStoredAnalysis(null);
       setBranch(null);
@@ -229,6 +245,7 @@ export function Workspace() {
           resume,
           {
             onAgentSteps: report,
+            onAgentThought: reportThought,
             onStorageSteps: setStorageSteps,
             onPhase: next => { setPhase(next); if (next === "embedding") setStage("analysis"); },
             onStored: setStoredResume,
@@ -279,7 +296,7 @@ export function Workspace() {
         if (abortRef.current === controller) setBusy(false);
       }
     },
-    [report, startCareerSwap],
+    [report, reportThought, startCareerSwap],
   );
 
   function handleSignIn(user: AuthenticatedUser) {
@@ -299,6 +316,7 @@ export function Workspace() {
       setFile(null);
       setStorageSteps([]);
       setAgentSteps(NO_STEPS);
+      setAgentThoughts({});
       setStoredResume(null);
       setStoredAnalysis(null);
       setAnalysis(null);
@@ -359,6 +377,7 @@ export function Workspace() {
     setFile(null);
     setStorageSteps([]);
     setAgentSteps(NO_STEPS);
+    setAgentThoughts({});
     setAnalysis(null);
     setBranch(null);
     setSwapState("idle");
@@ -453,6 +472,7 @@ export function Workspace() {
           <AnalysisStage
             preparingContext={stage === "intake"}
             agentSteps={agentSteps}
+            agentThoughts={agentThoughts}
             agentState={{
               parser: cardState(agentSteps.parser),
               context: cardState(agentSteps.context),

@@ -1,5 +1,6 @@
 export type AnalysisPhase = "parsing" | "context" | "embedding" | "planning" | "specialists" | "complete";
-export type ProgressReporter = (phase: AnalysisPhase) => void;
+/** Second argument is live agent commentary: never load-bearing, always optional. */
+export type ProgressReporter = (phase: AnalysisPhase, thought?: string) => void;
 
 /** Optional NDJSON transport; ordinary API callers retain the JSON response. */
 export function progressResponse(request: Request, run: (report?: ProgressReporter) => Promise<Response>): Promise<Response> | Response {
@@ -12,7 +13,7 @@ export function progressResponse(request: Request, run: (report?: ProgressReport
         if (!cancelled) controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
       };
       try {
-        const result = await run(phase => send({ type: "phase", phase }));
+        const result = await run((phase, thought) => send({ type: "phase", phase, thought }));
         send({ type: "result", status: result.status, body: await result.json() });
       } catch {
         send({ type: "result", status: 502, body: { error: "The agents could not finish. Try again.", retryable: true } });

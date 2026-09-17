@@ -113,7 +113,7 @@ export async function completeIntake(userId: string, raw: unknown, onProgress?: 
     const parsed = reusableParseResult(stored) ?? await embedParsedResume(intake.parsed, evidence);
     parsed.usage = { inputTokens: parsed.usage.inputTokens + intake.generationUsage.inputTokens, outputTokens: parsed.usage.outputTokens + intake.generationUsage.outputTokens };
     const result = await runAnalysis(resume, onProgress ? event => {
-      if (event.phase === "planning" || event.phase === "specialists" || event.phase === "complete") onProgress(event.phase);
+      if (event.phase === "planning" || event.phase === "specialists" || event.phase === "complete") onProgress(event.phase, "thought" in event ? event.thought : undefined);
     } : undefined, { parsed, leaseToken: claimed.leaseToken!, expiresAt: intake.questionnaire.expiresAt });
     await saveIntake(userId, { ...claimed, result, leaseUntil: 0 }, claimed);
     return result;

@@ -66,7 +66,8 @@ export type PipelineProgress = (
   event:
     | { phase: "parsing" }
     | { phase: "storing" }
-    | { phase: "planning" }
+    /** `thought` carries the planner's live reasoning while its tool loop runs. */
+    | { phase: "planning"; thought?: string }
     | { phase: "specialists" }
     | { phase: "complete" },
 ) => void;
@@ -187,7 +188,12 @@ export async function runAnalysis(
   // means no snapshot is available — the scraper is not deployed, or has never
   // run — and every use below degrades to "no openings" rather than failing.
   const [planned, jobMatcher] = await Promise.all([
-    planCareers(parsed.profile),
+    // The planner is the only agent that chooses what to look up, so it is the
+    // only one with anything to narrate. Each thought is one `planning` frame
+    // on the same NDJSON stream the phases already use.
+    planCareers(parsed.profile, (thought) =>
+      onProgress?.({ phase: "planning", thought }),
+    ),
     // Skills the candidate disclaimed in the questionnaire are dropped here.
     // The parser extracts from the document; the questionnaire is the
     // candidate correcting it. Passing the raw list would let a job's "must

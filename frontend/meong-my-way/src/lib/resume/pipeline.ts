@@ -28,6 +28,8 @@ export type PipelineEvents = {
   onIntake: (intake: IntakeResponse) => void;
   onQuestionnaire: (intake: IntakeResponse) => Promise<QuestionnaireSubmission>;
   onAgentSteps: (agent: AgentId, steps: AgentStep[]) => void;
+  /** Live reasoning from an agent that chooses its own lookups. Presentation only. */
+  onAgentThought: (agent: AgentId, thought: string) => void;
   onStorageSteps: (steps: AgentStep[]) => void;
   onPhase: (phase: PipelinePhase) => void;
   onStored: (resume: StoredResume) => void;
@@ -152,8 +154,18 @@ export async function runResumePipeline(
 
   /* --- The agents ------------------------------------------------------- */
 
-  const reportPhase = (phase: import("@/lib/analysis/progress").AnalysisPhase) => {
+  const reportPhase = (
+    phase: import("@/lib/analysis/progress").AnalysisPhase,
+    thought?: string,
+  ) => {
     if (signal.aborted || phase === "complete") return;
+    // A thought is an update *within* a phase, never a transition into one.
+    // Falling through would re-run the phase's transition on every thought and
+    // reset the step list the planner is already partway through.
+    if (thought) {
+      events.onAgentThought("planner", thought);
+      return;
+    }
     events.onPhase(phase);
     if (phase === "parsing") events.onAgentSteps("parser", agentSteps("parser", 0));
     if (phase === "context") {

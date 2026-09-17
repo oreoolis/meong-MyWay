@@ -5,7 +5,9 @@ import {
   type ContentBlock,
   type DocumentFormat,
   type Message,
+  type Tool,
   type ToolConfiguration,
+  type ToolInputSchema,
 } from "@aws-sdk/client-bedrock-runtime";
 
 import { getBedrockClient, getBedrockConfig } from "@/lib/aws/clients";
@@ -339,6 +341,197 @@ const RESULT_TOOL_CONFIG = {
   // model that replies in prose has failed the request.
   toolChoice: { tool: { name: RESULT_TOOL } },
 } satisfies ToolConfiguration;
+
+/* -------------------------------------------------------------------------
+ * Tool use
+ * ---------------------------------------------------------------------- */
+
+/**
+ * One thing the model may look up before answering.
+ *
+ * `run` receives whatever the model put in `toolUse.input` — untrusted, model
+ * authored, ultimately steered by resume text a stranger uploaded — so every
+ * implementation validates its own arguments rather than trusting the schema
+ * to have been honoured.
+ */
+export type AgentTool = {
+  name: string;
+  description: string;
+  /** JSON Schema for the arguments. Advisory: the model can still get it wrong. */
+  schema: Record<string, unknown>;
+  run: (input: Record<string, unknown>) => Promise<string>;
+  /** One line for the UI, so a viewer sees what was looked up and why. */
+  narrate?: (input: Record<string, unknown>) => string;
+};
+
+export type ReasonWithToolsOptions = ReasonOptions & {
+  tools: AgentTool[];
+  /**
+   * Stops a model that keeps calling tools instead of answering. Reached =
+   * failure: the caller falls back to a single-shot `reasonJson` rather than
+   * returning whatever half-finished state the loop was in.
+   */
+  maxTurns?: number;
+  /** Live commentary for the progress stream. Never load-bearing. */
+  onThought?: (text: string) => void;
+};
+
+/** Model text, tool calls and tool results all rejoin the conversation here. */
+function toolResultBlock(toolUseId: string, text: string): ContentBlock {
+  return { toolResult: { toolUseId, content: [{ text }], status: "success" } };
+}
+
+/**
+ * Ask the model for a JSON object of shape `T`, letting it look things up
+ * first.
+ *
+ * Same contract as `reasonJson` — same forced `emit_result` shape at the end —
+ * with the agent's own tools offered alongside and `toolChoice: auto`, so the
+ * model decides whether it has enough to answer or needs to check something.
+ * That decision is the only thing agentic here; the pipeline around it is
+ * still a fixed DAG, deliberately (see the note above `runAnalysis`).
+ *
+ * Every failure mode throws. The caller is expected to fall back to
+ * `reasonJson`, so a tool outage, a turn-cap hit or a malformed tool call
+ * costs accuracy rather than the run.
+ */
+export async function reasonJsonWithTools<T>(
+  options: ReasonWithToolsOptions,
+): Promise<ReasonResult<T>> {
+  const { reasoningModelId } = getBedrockConfig();
+  const maxTurns = options.maxTurns ?? 4;
+  const byName = new Map(options.tools.map((tool) => [tool.name, tool]));
+
+  const toolConfig: ToolConfiguration = {
+    tools: [
+      ...RESULT_TOOL_CONFIG.tools,
+      ...options.tools.map(
+        (tool): Tool => ({
+          toolSpec: {
+            name: tool.name,
+            description: tool.description,
+            // The SDK types `json` as its own recursive `DocumentType`. A
+            // JSON Schema object satisfies it structurally but not nominally.
+            inputSchema: { json: tool.schema } as ToolInputSchema,
+          },
+        }),
+      ),
+    ],
+    // `auto`, not forced. Forcing `emit_result` is what makes `reasonJson`
+    // single-shot; letting the model choose is the whole difference.
+    toolChoice: { auto: {} },
+  };
+
+  const messages: Message[] = [userTurn(options.prompt, options.document)];
+  const usage: ModelUsage = { inputTokens: 0, outputTokens: 0 };
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    let response;
+    try {
+      response = await getBedrockClient().send(
+        new ConverseCommand({
+          modelId: reasoningModelId,
+          system: [{ text: options.system }],
+          messages,
+          toolConfig,
+          inferenceConfig: {
+            temperature: 0,
+            maxTokens: options.maxTokens ?? 2048,
+          },
+        }),
+      );
+    } catch (error) {
+      if (options.document && isDocumentRejection(error)) {
+        throw new DocumentRejectedError(
+          "We could not read that file. It may be damaged, password-protected, " +
+            `or not really a ${RESUME_FORMATS_LABEL} file. Save your resume again and re-upload it.`,
+        );
+      }
+      throw new AgentReasoningError(
+        `Bedrock rejected the ${options.agent} request.`,
+        options.agent,
+        error,
+      );
+    }
+
+    usage.inputTokens += response.usage?.inputTokens ?? 0;
+    usage.outputTokens += response.usage?.outputTokens ?? 0;
+
+    if (response.stopReason === "max_tokens") {
+      throw new AgentReasoningError(
+        `The ${options.agent} agent hit its token ceiling before finishing.`,
+        options.agent,
+      );
+    }
+
+    const blocks = response.output?.message?.content ?? [];
+
+    // The answer. Same unwrapping as `reasonJson`.
+    const result = blocks.find((block) => block.toolUse?.name === RESULT_TOOL)?.toolUse;
+    if (result) {
+      const input = result.input as { result?: unknown } | undefined;
+      const payload =
+        input?.result !== undefined && input.result !== null ? input.result : input;
+      return { value: payload as T, usage };
+    }
+
+    const calls = blocks.flatMap((block) =>
+      block.toolUse && block.toolUse.name !== RESULT_TOOL ? [block.toolUse] : [],
+    );
+    if (calls.length === 0) {
+      throw new AgentReasoningError(
+        `The ${options.agent} agent neither answered nor called a tool.`,
+        options.agent,
+      );
+    }
+
+    // The model's own reasoning, when it narrated before calling. Shown as-is;
+    // it is model output, so the UI treats it as text and never as markup.
+    const said = blocks
+      .map((block) => block.text ?? "")
+      .join(" ")
+      .trim();
+    if (said) options.onThought?.(said);
+
+    // Assistant turn first, then one user turn carrying every result. Bedrock
+    // rejects a conversation where a `toolUse` is not answered by a matching
+    // `toolResult`, so the two are appended together or not at all.
+    messages.push({ role: "assistant", content: blocks });
+
+    const results: ContentBlock[] = [];
+    for (const call of calls) {
+      const tool = byName.get(call.name ?? "");
+      const input = (call.input ?? {}) as Record<string, unknown>;
+
+      if (!tool) {
+        results.push(toolResultBlock(call.toolUseId!, `Unknown tool "${call.name}".`));
+        continue;
+      }
+
+      if (tool.narrate) options.onThought?.(tool.narrate(input));
+
+      // A failing lookup is reported back to the model, not thrown. It can
+      // then try a different query or answer without it, which is the point of
+      // giving it the choice — and it matches how the pipeline treats every
+      // other framework lookup: best-effort input to reasoning.
+      try {
+        results.push(toolResultBlock(call.toolUseId!, await tool.run(input)));
+      } catch (error) {
+        console.warn(`[${options.agent}] tool ${tool.name} failed:`, error);
+        results.push(
+          toolResultBlock(call.toolUseId!, "That lookup failed. Answer without it."),
+        );
+      }
+    }
+
+    messages.push({ role: "user", content: results });
+  }
+
+  throw new AgentReasoningError(
+    `The ${options.agent} agent kept looking things up past ${maxTurns} turns.`,
+    options.agent,
+  );
+}
 
 /**
  * Ask the model for a JSON object of shape `T`.

@@ -31,7 +31,8 @@ beforeEach(() => {
 it("passes enriched evidence to planner/advisor and preserves specialist partial failures without parsing again", async () => {
   const result = await runAnalysis(resume, undefined, { parsed, leaseToken: "lease", expiresAt: 9999999999 });
   expect(m.parseResume).not.toHaveBeenCalled();
-  expect(m.planCareers).toHaveBeenCalledWith(parsed.profile);
+  // Second argument is the planner's thought sink — see `PipelineProgress`.
+  expect(m.planCareers).toHaveBeenCalledWith(parsed.profile, expect.any(Function));
   expect(m.adviseOnIndustry).toHaveBeenCalledWith(parsed.profile, [0, 1], expect.anything(), expect.anything());
   expect(result.advice).toBeNull();
   expect(result.improvement.verdict).toBe("Useful");
