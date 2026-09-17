@@ -26,6 +26,35 @@ export class AwsConfigurationError extends Error {
   }
 }
 
+/**
+ * Whether a thrown error is a transport-level failure talking to AWS — a
+ * reset, dropped, or timed-out socket — rather than a real fault in the
+ * request.
+ *
+ * These carry no application wrapper the way `AgentReasoningError` or
+ * `DocumentRejectedError` do, so a route's generic catch has no way to tell
+ * "this will fail identically forever" from "the connection was reset" without
+ * checking the transport error codes. Getting that wrong is what makes a
+ * transient `ECONNRESET` look permanent: every generic 500 in this app omits
+ * `retryable`, and the client defaults an unmarked error to *not* retryable —
+ * see `isRetryableFailure` in `components/workspace.tsx`.
+ *
+ * Checked recursively because the SDK sometimes nests the real cause under
+ * `.cause` (Bedrock's `AgentReasoningError`) rather than surfacing it on the
+ * error itself (S3, DynamoDB).
+ */
+export function isTransientAwsError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code && ["ECONNRESET", "ETIMEDOUT", "ECONNABORTED", "EPIPE", "ENOTFOUND"].includes(code)) {
+    return true;
+  }
+  if (error.name === "TimeoutError") return true;
+
+  return isTransientAwsError((error as { cause?: unknown }).cause);
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new AwsConfigurationError([name]);
@@ -129,16 +158,35 @@ let s3: S3Client | undefined;
 let ddb: DynamoDBDocumentClient | undefined;
 let bedrock: BedrockRuntimeClient | undefined;
 
+/**
+ * The SDK's default retry ceiling — three attempts total, so two retries —
+ * covers throttling fine but is thin against a reset or dropped connection:
+ * each retry opens a fresh socket, so what heals an `ECONNRESET` is attempts,
+ * not backoff. Five gives a network blip two more chances to clear before it
+ * reaches the user as a failed run. Cheap either way — a retry here is a
+ * resend after a connection-level failure, never a duplicate charge for a
+ * call that actually succeeded.
+ */
+const NETWORK_RETRY_ATTEMPTS = 5;
+
 export function getS3Client(): S3Client {
   const { region } = getStorageConfig();
-  s3 ??= new S3Client({ region, credentials: explicitCredentials() });
+  s3 ??= new S3Client({
+    region,
+    credentials: explicitCredentials(),
+    maxAttempts: NETWORK_RETRY_ATTEMPTS,
+  });
   return s3;
 }
 
 export function getDocumentClient(): DynamoDBDocumentClient {
   const { region } = getStorageConfig();
   ddb ??= DynamoDBDocumentClient.from(
-    new DynamoDBClient({ region, credentials: explicitCredentials() }),
+    new DynamoDBClient({
+      region,
+      credentials: explicitCredentials(),
+      maxAttempts: NETWORK_RETRY_ATTEMPTS,
+    }),
     {
       marshallOptions: { removeUndefinedValues: true },
       unmarshallOptions: { wrapNumbers: false },
@@ -152,10 +200,11 @@ export function getBedrockClient(): BedrockRuntimeClient {
   bedrock ??= new BedrockRuntimeClient({
     region,
     credentials: explicitCredentials(),
-    // A five-agent run is five sequential model calls; the SDK default of
-    // three attempts on a throttle is what keeps a burst from failing the
-    // whole pipeline.
-    maxAttempts: 3,
+    // Was 3. A five-agent run is five sequential model calls, so this was
+    // already raised once to survive a throttle mid-burst; the same number
+    // undersells a dropped connection, which needs attempts more than backoff
+    // — see `NETWORK_RETRY_ATTEMPTS`.
+    maxAttempts: NETWORK_RETRY_ATTEMPTS,
   });
   return bedrock;
 }
