@@ -5,7 +5,7 @@ import {
   EMBEDDING_DIMENSIONS,
   embedText,
 } from "@/lib/bedrock/embeddings";
-import type { CareerPath, RecommendedCourse, SkillGap } from "@/lib/contracts";
+import type { RecommendedCourse, SkillGap } from "@/lib/contracts";
 import {
   searchCourses,
   SsgCredentialsError,
@@ -71,6 +71,21 @@ const QUERY_QUALIFIERS = new Set([
   "operation", "operations", "operational", "excellence",
   "production", "and", "the", "for", "with", "at", "of", "in", "to",
 ]);
+
+/**
+ * Anything with gaps worth closing.
+ *
+ * Only three fields are ever read — `id` to key by, `title` and `gaps` to
+ * build the text that gets embedded — so this is stated structurally rather
+ * than as `CareerPath`. A planner path and an advisor `MatchedRole` are the
+ * same question here: "what would close this person's gaps for this role".
+ */
+type Coursable = {
+  id: string;
+  title: string;
+  /** Optional so an advisor `MatchedRole`, whose gaps predate this, fits too. */
+  gaps?: SkillGap[];
+};
 
 type GapTarget = {
   pathId: string;
@@ -160,7 +175,7 @@ function courseText(course: SsgCourse): string {
     .join(". ");
 }
 
-function gapText(path: CareerPath, gap: SkillGap): string {
+function gapText(path: Coursable, gap: SkillGap): string {
   // Labels matter for short, overloaded phrases such as "incident response".
   // The remedy explains what the missing capability means in this plan, while
   // the target role keeps a backend incident from resembling fire-safety
@@ -180,8 +195,8 @@ function isActive(course: SsgCourse): boolean {
   return !course.status?.code || course.status.code === "1";
 }
 
-function importantGaps(path: CareerPath): SkillGap[] {
-  return [...path.gaps]
+function importantGaps(path: Coursable): SkillGap[] {
+  return [...(path.gaps ?? [])]
     .filter((gap) => gap.skill.trim().length >= 3)
     .sort((a, b) => SEVERITY_WEIGHT[b.severity] - SEVERITY_WEIGHT[a.severity])
     .filter(
@@ -195,7 +210,7 @@ function importantGaps(path: CareerPath): SkillGap[] {
 
 /** Cheap candidate gate only; cosine similarity makes the final decision. */
 function lexicalRelatedness(
-  path: CareerPath,
+  path: Coursable,
   gap: SkillGap,
   course: SsgCourse,
 ): number {
@@ -349,10 +364,10 @@ function fromPooled(course: PooledCourse): RecommendedCourse {
  * still caps what reaches the user, so a wider candidate set changes which
  * three courses are shown, not how many.
  */
-async function fromPool(
-  paths: CareerPath[],
+async function fromPool<T extends Coursable>(
+  paths: T[],
   pool: CoursePool,
-): Promise<CareerPath[] | null> {
+): Promise<T[] | null> {
   // A course whose vector is missing or the wrong width is skipped, never
   // scored zero: the scraper's per-run embedding budget leaves newly
   // discovered courses vectorless for a run or two, and a zero vector would
@@ -378,7 +393,7 @@ async function fromPool(
     paths.map((path) => [path.id, importantGaps(path)] as const),
   );
 
-  const uniqueGaps = new Map<string, { path: CareerPath; gap: SkillGap }>();
+  const uniqueGaps = new Map<string, { path: Coursable; gap: SkillGap }>();
   for (const path of paths) {
     for (const gap of gapsByPath.get(path.id) ?? []) {
       uniqueGaps.set(gapText(path, gap).toLowerCase(), { path, gap });
@@ -447,7 +462,7 @@ async function fromPool(
  * was written by a different embedding model. The fallback is the original
  * path and needs SSG credentials; the pool path needs none.
  */
-export async function withRecommendedCourses(paths: CareerPath[]): Promise<CareerPath[]> {
+export async function withRecommendedCourses<T extends Coursable>(paths: T[]): Promise<T[]> {
   if (paths.length === 0) return paths;
 
   // A read failure degrades to the live directory rather than losing course
@@ -490,7 +505,7 @@ export async function withRecommendedCourses(paths: CareerPath[]): Promise<Caree
  * infrastructure — a deployment without the scraper still recommends courses,
  * just from a narrower candidate set and at the cost of a live API call.
  */
-async function fromLiveDirectory(paths: CareerPath[]): Promise<CareerPath[]> {
+async function fromLiveDirectory<T extends Coursable>(paths: T[]): Promise<T[]> {
   if (!hasSsgCredentials()) throw new SsgCredentialsError();
 
   const gapsByPath = new Map(
@@ -562,7 +577,7 @@ async function fromLiveDirectory(paths: CareerPath[]): Promise<CareerPath[]> {
   const courseVectors = new Map<string, number[]>();
   const gapVectors = new Map<string, number[]>();
   const pathsById = new Map(paths.map((path) => [path.id, path] as const));
-  const uniqueGaps = new Map<string, { path: CareerPath; gap: SkillGap }>();
+  const uniqueGaps = new Map<string, { path: Coursable; gap: SkillGap }>();
   for (const target of targets) {
     const path = pathsById.get(target.pathId);
     if (!path) continue;
