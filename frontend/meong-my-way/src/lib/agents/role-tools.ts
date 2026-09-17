@@ -2,7 +2,13 @@ import "server-only";
 
 import type { AgentTool } from "@/lib/bedrock/reason";
 
-import { findRoles, lookupCompetencies, scoreRoles, type ScoredRole } from "./role-matching";
+import {
+  findRoles,
+  lookupCompetencies,
+  MAX_ROLES_TO_SCORE,
+  scoreRoles,
+  type ScoredRole,
+} from "./role-matching";
 
 /**
  * The Skills Framework, as tools.
@@ -29,6 +35,20 @@ export type RoleToolkit = {
   /** Every scored role any `search_roles` call surfaced, keyed by role ID. */
   seen: Map<string, ScoredRole>;
 };
+
+/**
+ * Roles a single run may embed, across every `search_roles` call.
+ *
+ * `scoreRoles` caps each call at 24, which was the whole budget when the agent
+ * searched once with a fixed keyword list. A model that chooses its own
+ * keywords searches three or four times, so the per-call cap stopped bounding
+ * the run — turns × 24 did. This is the number that bounds it now, and it is
+ * deliberately close to what the single-call version spent.
+ *
+ * Reaching it does not fail the run: the tool says it is exhausted and the
+ * model answers from what it already has.
+ */
+const MAX_ROLES_TO_EMBED_PER_RUN = 40;
 
 /** A tool result is read by a model, so it is prose, not JSON. */
 function describe(entry: ScoredRole): string {
@@ -63,6 +83,7 @@ export function roleToolkit(options: {
   competencyKind: "technical" | "generic";
 }): RoleToolkit {
   const seen = new Map<string, ScoredRole>();
+  let embedded = 0;
 
   const searchRoles: AgentTool = {
     name: "search_roles",
@@ -96,11 +117,34 @@ export function roleToolkit(options: {
         return "No roles. Try a different keyword, or a broader one.";
       }
 
-      const scored = await scoreRoles(candidates, options.resumeVector);
-      if (scored.length === 0) return "No role could be scored against this résumé.";
+      // A role two keywords both return is embedded once. Its score cannot
+      // change — the résumé vector is fixed for the run — so re-scoring it is
+      // a Titan call for an answer already held, and overlap is the normal
+      // case: "Data" and "Analyst" both return Data Analyst.
+      const known = candidates.flatMap((role) => {
+        const entry = seen.get(role.id);
+        return entry ? [entry] : [];
+      });
+      const fresh = candidates.filter((role) => !seen.has(role.id));
 
+      // Sliced against both caps here rather than leaving `scoreRoles` to
+      // apply its own, so `embedded` counts what was actually embedded instead
+      // of what was offered.
+      const budget = Math.max(0, MAX_ROLES_TO_EMBED_PER_RUN - embedded);
+      const scoring = fresh.slice(0, Math.min(budget, MAX_ROLES_TO_SCORE));
+      embedded += scoring.length;
+
+      const scored = await scoreRoles(scoring, options.resumeVector);
       for (const entry of scored) seen.set(entry.role.id, entry);
-      return scored.map(describe).join("\n");
+
+      const results = [...known, ...scored].sort((a, b) => b.score - a.score);
+      if (results.length === 0) {
+        return budget === 0
+          ? "Search budget spent. Answer from the roles you already have."
+          : "No role could be scored against this résumé.";
+      }
+
+      return results.map(describe).join("\n");
     },
   };
 

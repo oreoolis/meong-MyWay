@@ -34,7 +34,7 @@ import { hasSsgCredentials } from "@/lib/ssg/oauth";
  * but the whole set runs before the agent can start reasoning, so this is a
  * latency ceiling as much as a cost one.
  */
-const MAX_ROLES_TO_SCORE = 24;
+export const MAX_ROLES_TO_SCORE = 24;
 
 /** How many survive into the prompt. */
 const MAX_ROLES_TO_PROMPT = 8;

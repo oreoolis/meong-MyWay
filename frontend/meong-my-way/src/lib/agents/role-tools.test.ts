@@ -5,7 +5,12 @@ const m = vi.hoisted(() => ({
   scoreRoles: vi.fn(),
   lookupCompetencies: vi.fn(),
 }));
-vi.mock("./role-matching", () => m);
+// Spread the original: only the three network-touching functions are mocked,
+// so real constants like MAX_ROLES_TO_SCORE keep their values.
+vi.mock("./role-matching", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./role-matching")>()),
+  ...m,
+}));
 
 const { roleToolkit } = await import("./role-tools");
 
@@ -72,6 +77,56 @@ describe("roleToolkit", () => {
 
     expect(m.scoreRoles).toHaveBeenCalledWith([role("away", "2")], [1]);
     expect([...seen.keys()]).toEqual(["away"]);
+  });
+
+  it("never re-embeds a role a previous search already scored", async () => {
+    // "Data" and "Analyst" both return Data Analyst. Its score cannot change —
+    // the résumé vector is fixed — so the second search must not pay for it.
+    m.findRoles
+      .mockResolvedValueOnce({ roles: [role("shared", "1"), role("a", "1")] })
+      .mockResolvedValueOnce({ roles: [role("shared", "1"), role("b", "1")] });
+    m.scoreRoles
+      .mockResolvedValueOnce([
+        { role: role("shared", "1"), score: 90 },
+        { role: role("a", "1"), score: 70 },
+      ])
+      .mockResolvedValueOnce([{ role: role("b", "1"), score: 80 }]);
+
+    const { tools, seen } = roleToolkit({ resumeVector: [1], competencyKind: "technical" });
+    await tools[0].run({ keyword: "Data" });
+    const text = await tools[0].run({ keyword: "Analyst" });
+
+    // Only the genuinely new role reached the embedder the second time.
+    expect(m.scoreRoles).toHaveBeenNthCalledWith(2, [role("b", "1")], [1]);
+    // The model still sees the shared role, ranked against the new one.
+    expect(text.split("\n")[0]).toContain("id=shared");
+    expect([...seen.keys()].sort()).toEqual(["a", "b", "shared"]);
+  });
+
+  it("stops embedding once the run budget is spent", async () => {
+    const many = (prefix: string) =>
+      Array.from({ length: 30 }, (_, i) => role(`${prefix}${i}`, "1"));
+    m.findRoles.mockImplementation(async ({ length } = {}) => {
+      void length;
+      return { roles: many(m.findRoles.mock.calls.length === 1 ? "x" : "y") };
+    });
+    m.scoreRoles.mockImplementation(async (roles: { id: string }[]) =>
+      roles.map((r) => ({ role: r, score: 50 })),
+    );
+
+    const { tools } = roleToolkit({ resumeVector: [1], competencyKind: "technical" });
+    await tools[0].run({ keyword: "One" });
+    await tools[0].run({ keyword: "Two" });
+    const third = await tools[0].run({ keyword: "Three" });
+
+    const totalEmbedded = m.scoreRoles.mock.calls.reduce<number>(
+      (sum, call) => sum + (call[0] as unknown[]).length,
+      0,
+    );
+    // 40 is the run ceiling. Reaching it is not a failure — the tool says so
+    // and the model answers from what it has.
+    expect(totalEmbedded).toBe(40);
+    expect(third).toMatch(/budget spent|id=/);
   });
 
   it("tells the model to retry rather than recording nothing silently", async () => {
