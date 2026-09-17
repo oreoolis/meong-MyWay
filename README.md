@@ -99,6 +99,8 @@ why, are in [Static analysis: what CI actually checks](#static-analysis-what-ci-
 
 The two answer different questions. The Skills Framework is a **taxonomy** — what a "Data Analyst" is, what it pays, which competencies it demands — and has no vacancies in it. MyCareersFuture carries the **vacancies**: who is hiring right now, and the URL to apply. Roles and paths come from the first; the vacancies listed under each of them come from the second.
 
+SSG's **course directory** is a third endpoint on the first host, and it answers "what could someone train for". Unlike the other two it is not read during a request: a weekly Lambda sweeps it into an S3 pool with a Titan embedding already attached to every course, so closing a skill gap is a cosine scan rather than an API call. See [the two S3 pools](#the-two-s3-pools).
+
 ---
 
 ## Architecture Overview
@@ -168,6 +170,7 @@ graph TD
         ddbResumes[("DynamoDB<br/>{project}-resumes")]
         ddbAnalyses[("DynamoDB<br/>{project}-analyses")]
         s3Jobs[("S3 Bucket<br/>{project}-jobs<br/>jobs/latest.json")]
+        s3Courses[("same bucket<br/>courses/latest.json<br/>course + 1024d vector")]
     end
 
     subgraph jobsfeed["💼 Job listings feed (every 12h)"]
@@ -176,9 +179,20 @@ graph TD
         mcf[("🇸🇬 MyCareersFuture<br/>public jobs API")]
     end
 
+    subgraph coursefeed["🎓 Course pool (every 7d)"]
+        ebCourses["Amazon EventBridge<br/>rate(7 days)"]
+        lambdaCourses["AWS Lambda<br/>lambda/courses-scraper"]
+        ssgCourses[("🇸🇬 SSG-WSG<br/>course directory")]
+    end
+
     ebRule -->|scheduled invoke| lambda
     lambda -->|"GET, sorted by new_posting_date,<br/>paged until the 24h cutoff"| mcf
     lambda -->|"run archive, then flip latest.json"| s3Jobs
+
+    ebCourses -->|scheduled invoke| lambdaCourses
+    lambdaCourses -->|"OAuth, swept by seed keyword"| ssgCourses
+    lambdaCourses -->|"embeds only what has no vector yet"| bedrock
+    lambdaCourses -->|"run archive, then flip latest.json"| s3Courses
 
     parser -->|Converse: reads PDF/DOCX,<br/>emits skills + embedding| bedrock
     planner -->|Converse: drafts trajectory<br/>+ paths| bedrock
@@ -197,6 +211,9 @@ graph TD
     orchestrator -->|"planner paths,<br/>advisor roles,<br/>swapper destinations"| matcher
     matcher -->|"reads the snapshot"| s3Jobs
     matcher -->|"embeds shortlisted postings,<br/>ranks against the resume vector"| bedrock
+    orchestrator -->|"gaps from paths<br/>and advisor roles"| courses["lib/courses<br/>recommendations.ts"]
+    courses -->|"reads the pool"| s3Courses
+    courses -->|"embeds the gaps only —<br/>courses arrive pre-embedded"| bedrock
 
     subgraph deploy["⚙️ CI/CD"]
         gha["GitHub Actions<br/>on push to iac/**"]
@@ -288,6 +305,29 @@ The Questionnaire Agent has no tools and is not missing any. Its questions come 
 So a Skills Framework outage, a Bedrock throttle, or a model that will not stop searching costs accuracy, never the analysis.
 
 **Cost.** The advisor and swapper barely move: they fetched those roles either way, so only the turns are new. The parser, planner and improver add lookups that were not there before. Measured ceiling is roughly $0.12–0.18 per run against ~$0.05 before, which keeps a $20 budget over 100 runs. ADR-0002's arithmetic is unchanged in kind.
+
+### The two S3 pools
+
+Both feeds write to one bucket under separate prefixes. They hold the same kind of thing — a shared, non-personal, derived market snapshot — so the encryption and lifecycle arguments in `iac/jobs.tf` cover both, and the scanner suppressions scoped to that file are not re-litigated for a near-identical second bucket.
+
+| | `jobs/latest.json` | `courses/latest.json` |
+|---|---|---|
+| source | MyCareersFuture, open GET | SSG course directory, OAuth |
+| schedule | `rate(12 hours)` | `rate(7 days)` |
+| retention | 7 days from posting | 30 days from last seen |
+| embeddings | none — postings are embedded per request | **1024d Titan vector per course, precomputed** |
+
+**Only the course pool carries vectors, and that asymmetry is the point.** A job posting is relevant for about a week and there are thousands; embedding them all weekly to serve a handful per run would be waste. A course catalogue barely moves, so embedding it once and reusing the vector for every user is almost free.
+
+What that changed for the Career Planner: it used to call the directory live and embed up to 24 candidate courses on the critical path of every analysis — one API round trip plus two dozen Bedrock calls, with the same courses re-embedded for every user. Now only the *gaps* are embedded, and each is scored against the whole pool instead of the six courses a keyword search happened to return. A course reachable only by meaning — "Power BI Essentials" for a "Data Visualisation" gap — is now visible where a keyword prefilter would have missed it.
+
+Three details that keep it honest:
+
+- **A course is embedded once.** `mergePool` reuses the vector whenever the text that produced it is unchanged, so a steady-state run costs a handful of Bedrock calls rather than 1,500.
+- **A vectorless course is skipped, never scored zero.** The scraper's per-run budget leaves newly found courses without a vector for a run or two, and zero would read as a mediocre match rather than an absent one.
+- **A pool at the wrong width is unusable, not merely worse.** `store.ts` checks `embedding.dimensions` against `EMBEDDING_DIMENSIONS` and falls back to the live directory — a cosine between vectors from different models is noise.
+
+The app works without either pool. No `S3_COURSES_BUCKET` means the planner queries SkillsFuture live, which is slower, needs `SSG_CLIENT_ID`/`SECRET`, and compares against a narrower candidate set.
 
 ### Why the normalisation code stays
 
@@ -430,7 +470,7 @@ sequenceDiagram
 | 2 | Questionnaire Agent | `lib/agents/resume-context.ts` | Parsed profile | — | Two to three reviewed questions and token usage |
 | 3 | Career Planner | `lib/agents/career-planner.ts` | The profile | `find_job_role`, `find_courses` | `CareerPlan`: current trajectory and ranked paths |
 | 4 | Resume Improver | `lib/agents/resume-improver.ts` | Profile, plan, original document | `check_keyword_demand` | Quoted, line-level rewrites with impact ratings |
-| 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector | `search_roles`, `lookup_competencies` | Roles inside the current sector, ranked by fit |
+| 5 | Industry Advisor | `lib/agents/industry-advisor.ts` | Profile, embedding, sector | `search_roles`, `lookup_competencies` | Roles inside the current sector, ranked by fit, each with the courses that close its gaps |
 | 6 | Career Swapper | `lib/agents/career-swapper.ts` | Profile, embedding, current sector | `search_roles`, `lookup_competencies` | Pivot destinations, portable skills, coach referrals |
 
 Orchestration (`lib/agents/orchestrator.ts`) enforces one rule: **nothing reaches the planner until the parser's output is durably stored**, so a failed run is resumable from the expensive step. Agents 4 and 5 then fan out with `Promise.allSettled`, so one specialist failing (for example, no SSG credentials) still returns a usable bundle. Agent 6 sits deliberately outside that fan-out.
@@ -798,6 +838,28 @@ bash iac/sync-env.sh
 
 Expect `{"jobs":N,"fetched":M,...}` with `N` above zero. The Lambda **raises rather than publishing an empty snapshot**, so a failure here is loud and `jobs/latest.json` keeps its last good contents — an empty job market shown to every user is a worse outcome than a stale one, and the CloudWatch alarm exists to catch exactly that.
 
+#### The course pool
+
+Separate switch, same bucket. It needs SSG credentials at apply time, because the Lambda cannot do anything without them and a function that fails every scheduled run is worse than one that was never created:
+
+```bash
+cat >> iac/terraform.tfvars <<'EOF'
+enable_courses_scraper = true
+ssg_client_id          = "..."
+ssg_client_secret      = "..."
+EOF
+
+terraform -chdir=iac apply
+aws lambda invoke --function-name meong-myway-courses-scraper out.json && cat out.json
+bash iac/sync-env.sh
+```
+
+Expect `{"courses":N,...}`. The first run is the slow one — it embeds the whole pool, up to `COURSES_MAX_EMBED_PER_RUN` (1500) — so the function is sized at 600s/1024MB for a cold start it does exactly once. Check `meta.pendingEmbeddings` in `courses/latest.json`: non-zero means the budget has not caught up and the next run will finish it.
+
+`meta.truncated` above zero means `COURSES_MAX_POOL` is binding and the pool has stopped taking on new courses. The fix is a narrower `courses_keywords` or fewer `COURSES_PAGES_PER_KEYWORD`, not a bigger cap — the published JSON is roughly 10 KB per course and the app downloads all of it.
+
+Turning the scraper back off leaves `courses/latest.json` in the bucket. That is why `getCoursesConfig()` reads `S3_COURSES_BUCKET` and deliberately does **not** fall back to `S3_JOBS_BUCKET`: a fallback would keep scoring against a pool that is frozen and ageing.
+
 #### The pool, and why one fetch is not a snapshot
 
 `jobs` is an **accumulating pool**, not the result of one fetch. Each run merges what it sees into what the last run left, keyed by MCF's posting id, and evicts anything older than `JOBS_RETENTION_DAYS` (7).
@@ -913,11 +975,12 @@ Then open **http://localhost:3000**. Restart the dev server after changing any `
 | `npm run test:watch` | Vitest, unit project, watch mode |
 | `npm run test:integration` | Vitest, integration project (hits real Bedrock/AWS where configured) |
 
-The jobs scraper is outside the Next.js app and has its own runner, from the repo root:
+Both scrapers are outside the Next.js app and have their own runner, from the repo root:
 
 | Command | What it does |
 |---------|--------------|
-| `node --test lambda/jobs-scraper/handler.test.js` | Scraper field mapping, offline against a captured fixture |
+| `node --test lambda/jobs-scraper/handler.test.js` | Jobs scraper field mapping, offline against a captured fixture |
+| `node --test lambda/courses-scraper/handler.test.js` | Course mapping, pool merge, vector reuse and retention |
 | `bash iac/sync-env.sh` | Rewrites `.env.local` from Terraform outputs |
 
 One integration test is run on purpose rather than as part of a suite, because it is a measuring instrument: `npx vitest run --project integration src/lib/jobs/calibration.itest.ts` re-derives the cosine band the job-match score is calibrated against. Run it after changing the embedding model or the job source.
@@ -965,11 +1028,14 @@ frontend/meong-my-way/src/
 │                                    # opening-badges (shared by all 3 surfaces)
 └── lib/
     ├── contracts.ts       # shared types, the agent/API contract
-    ├── use-estimated-progress.ts  # projected progress for work that reports none
-    ├── agents/            # the 6 agents, their tools, orchestrator + cost estimator
+    ├── agents/            # the 6 agents, orchestrator + cost estimator
+    │                       # + planner-tools.ts / role-tools.ts: what the
+    │                       #   tool loops are allowed to look up
     │                       # + coaches.ts: verified career services, not model output
-    │                       # + timings.ts: measured durations the UI estimates against
-    ├── bedrock/           # Converse wrapper (reason.ts) + embeddings.ts
+    ├── bedrock/           # Converse wrapper (reason.ts, single-shot + tool loop)
+    │                       # + embeddings.ts
+    ├── courses/            # pool types + cached S3 reader + recommendations.ts
+    │                       # (gap embeddings scored against the pooled courses)
     ├── ssg/                # SSG-WSG API client + OAuth token cache
     ├── jobs/               # snapshot types + S3 reader + matching.ts
     │                       # (prefilter, embed, calibrate; attaches openings
@@ -1122,6 +1188,9 @@ Cognito user pool ID or client ID is missing or wrong in `.env.local`. Verify th
 **`POST /api/analysis` returns 502 with `retryable: true`**
 A Bedrock call failed, usually throttling or a malformed model reply. This is `AgentReasoningError` from `lib/bedrock/reason.ts`, and retrying usually succeeds. Check the model is enabled under Bedrock, Model access. `POST /api/analysis/swap` answers the same way, and the Transitioner branch renders its own retry button for it.
 
+**`POST /api/analysis` logs `TimeoutError: read ECONNRESET` with `$metadata.attempts: 3`**
+The connection to AWS was reset mid-request. Not a fault in the request — the SDK retried and gave up. Two things were wrong and are now fixed: `maxAttempts` was the SDK default of 3 on S3 and DynamoDB, when a fresh socket per attempt is exactly what heals a reset, and the generic 500 omitted `retryable` entirely, so the client's `isRetryableFailure` treated it as permanent and hid the retry button. `isTransientAwsError` in `lib/aws/clients.ts` now recognises the transport codes, walking `.cause` because `AgentReasoningError` nests the real error. Retry; it usually succeeds on the next attempt.
+
 **Any AWS call fails with `ExpiredTokenException` (403)**
 Temporary `ASIA…` session credentials have aged out, which is common with lab and sandbox accounts. Re-authenticate (`aws sso login`, or restart the lab session and re-export) and restart the dev server. Nothing in the app is wrong. Every AWS call failing at once is the tell.
 
@@ -1182,4 +1251,6 @@ The filter takes a sector's numeric `id` from `listSectors` (for example `15614`
 A cross-region inference profile is authorised against the profile *and* against the foundation model in whichever region it routed to, so a policy granting only one of them fails on some requests and not others. `iac/bedrock.tf` expands both, reading the region list from the profile itself.
 
 **Analysis takes a long time or times out on serverless**
-Sequential-then-parallel model calls plus SSG lookups run long: about **50s** for agents 1 to 4, then **~32s** more for agent 5 in its own request. `maxDuration = 300` is set on both routes, but some platforms (Vercel Hobby, for one) cap function duration lower regardless, and the client already treats a timeout as retryable. If you need the first screen sooner, the remaining lever is the planner at 24.9s, which blocks everything downstream.
+Sequential-then-parallel model calls plus SSG lookups run long: about **50s** for agents 1 to 4, then **~32s** more for agent 5 in its own request. `maxDuration = 300` is set on both routes, but some platforms (Vercel Hobby, for one) cap function duration lower regardless, and the client already treats a timeout as retryable. If you need the first screen sooner, the remaining lever is the planner, which blocks everything downstream.
+
+Those figures predate the tool loops, which add turns to five of the six agents — budget for a slower run than the table above and re-measure before quoting a number. What the loops do *not* add is duplicate embedding work: role vectors are reused across a run's searches and capped at 40 per run (`role-tools.ts`), the job matcher caches postings by id under one run-wide budget, and courses arrive from the pool pre-embedded. The last thing a run does — attaching openings and courses to the advisor's roles — runs both concurrently, since neither reads the other's output.
