@@ -821,6 +821,14 @@ DYNAMODB_ANALYSES_TABLE=meong-myway-analyses
 # the app drops the opening badges and is otherwise unaffected.
 S3_JOBS_BUCKET=meong-myway-jobs-000000000000
 
+# The SkillsFuture course pool — the same bucket under a `courses/` prefix,
+# holding every course with its embedding already computed. Leave blank when
+# that scraper is not deployed: the career planner then queries the live
+# SkillsFuture directory and embeds candidates per analysis, which is slower,
+# needs SSG_CLIENT_ID/SECRET, and compares each gap against a keyword-filtered
+# handful of courses rather than the whole pool.
+S3_COURSES_BUCKET=meong-myway-jobs-000000000000
+
 # Omit locally to use your own AWS CLI credentials; omit entirely when deployed
 # and let the task/instance role supply them.
 AWS_ACCESS_KEY_ID=

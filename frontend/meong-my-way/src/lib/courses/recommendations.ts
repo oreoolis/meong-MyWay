@@ -1,6 +1,10 @@
 import "server-only";
 
-import { cosineSimilarity, embedText } from "@/lib/bedrock/embeddings";
+import {
+  cosineSimilarity,
+  EMBEDDING_DIMENSIONS,
+  embedText,
+} from "@/lib/bedrock/embeddings";
 import type { CareerPath, RecommendedCourse, SkillGap } from "@/lib/contracts";
 import {
   searchCourses,
@@ -8,6 +12,8 @@ import {
   type SsgCourse,
 } from "@/lib/ssg/client";
 import { hasSsgCredentials } from "@/lib/ssg/oauth";
+import { getCoursePool } from "./store";
+import type { CoursePool, PooledCourse } from "./types";
 
 const MAX_GAPS_PER_PATH = 3;
 const MAX_COURSES_PER_PATH = 3;
@@ -18,11 +24,16 @@ const SEARCH_PAGE_SIZE = 20;
 const SEARCH_TIMEOUT_MS = 6_000;
 
 /**
- * The same two-stage shape and run-wide controls as `jobs/matching.ts`.
+ * How many courses each gap carries into the ranking, on either retrieval
+ * path.
  *
- * SSG keyword retrieval is the cheap prefilter. Only the best few candidates
- * for each gap reach Bedrock, and every target gets its first candidate before
- * any target gets a second. A course wanted by several paths is embedded once.
+ * On the live path this is the same two-stage shape as `jobs/matching.ts`:
+ * SSG keyword retrieval is the cheap prefilter, only the best few candidates
+ * per gap reach Bedrock, and every target gets its first candidate before any
+ * target gets a second. A course wanted by several paths is embedded once.
+ *
+ * On the pool path nothing is being rationed — every course is already
+ * embedded — and this is simply the shortlist `chooseCourses` picks from.
  */
 const CANDIDATES_PER_GAP = 6;
 const MAX_COURSES_TO_EMBED_PER_RUN = 24;
@@ -237,6 +248,38 @@ function toRecommendation(
   };
 }
 
+/**
+ * Record one gap→course cosine, creating the course's entry on first sight.
+ *
+ * Shared by both retrieval paths so they accumulate identically: a course
+ * wanted by three gaps is one recommendation carrying three scores, not three
+ * recommendations.
+ */
+function record(
+  into: Map<string, SemanticCourse>,
+  recommendation: RecommendedCourse,
+  skill: string,
+  cosine: number,
+): void {
+  let semantic = into.get(recommendation.referenceNumber);
+  if (!semantic) {
+    semantic = { recommendation, scores: new Map() };
+    into.set(recommendation.referenceNumber, semantic);
+  }
+  semantic.scores.set(skill, cosine);
+}
+
+/** Name the gaps each course answered, then pick the final few. */
+function selectFor(
+  gaps: SkillGap[],
+  scored: Map<string, SemanticCourse>,
+): RecommendedCourse[] {
+  for (const semantic of scored.values()) {
+    semantic.recommendation.matchedSkills = [...semantic.scores.keys()];
+  }
+  return chooseCourses(gaps, [...scored.values()]);
+}
+
 function chooseCourses(
   gaps: SkillGap[],
   candidates: SemanticCourse[],
@@ -275,14 +318,179 @@ function chooseCourses(
   return selected.slice(0, MAX_COURSES_PER_PATH).map((item) => item.recommendation);
 }
 
+/* -------------------------------------------------------------------------
+ * Retrieval from the precomputed pool
+ * ---------------------------------------------------------------------- */
+
+/** Everything `RecommendedCourse` needs is already on a pooled course. */
+function fromPooled(course: PooledCourse): RecommendedCourse {
+  return {
+    referenceNumber: course.referenceNumber,
+    title: course.title,
+    provider: course.provider,
+    description: course.description,
+    url: course.url,
+    matchedSkills: [],
+  };
+}
+
+/**
+ * Embed the gaps once and score them against the whole pool.
+ *
+ * What this removes compared with the live path below: the directory round
+ * trip, and every course embedding. The only Bedrock work left is one vector
+ * per distinct gap — at most fifteen for a five-path plan — against the
+ * twenty-four course embeddings the live path paid for on every single run.
+ *
+ * What it adds is recall. The live path can only rank what a keyword search
+ * returned, so a course whose title shares no word with the gap is invisible
+ * however well it matches in meaning. Here every gap is compared against every
+ * pooled course, and the cosine — not a keyword — decides. `chooseCourses`
+ * still caps what reaches the user, so a wider candidate set changes which
+ * three courses are shown, not how many.
+ */
+async function fromPool(
+  paths: CareerPath[],
+  pool: CoursePool,
+): Promise<CareerPath[] | null> {
+  // A course whose vector is missing or the wrong width is skipped, never
+  // scored zero: the scraper's per-run embedding budget leaves newly
+  // discovered courses vectorless for a run or two, and a zero vector would
+  // read as a mediocre match rather than an absent one.
+  const scorable = pool.courses.filter(
+    (course): course is PooledCourse & { vector: number[] } =>
+      Array.isArray(course.vector) && course.vector.length === EMBEDDING_DIMENSIONS,
+  );
+
+  // Nothing to score against — a first run, a throttled embedding budget, or a
+  // Bedrock permission the scraper is missing. `null` hands the decision back
+  // to the caller, which falls through to the live directory: a pool that
+  // cannot answer must not silently take the place of one that could.
+  if (scorable.length === 0) {
+    console.warn(
+      `[courses] pool holds ${pool.courses.length} course(s) but none with a ` +
+        `${EMBEDDING_DIMENSIONS}-dimension vector — falling back to the live directory.`,
+    );
+    return null;
+  }
+
+  const gapsByPath = new Map(
+    paths.map((path) => [path.id, importantGaps(path)] as const),
+  );
+
+  const uniqueGaps = new Map<string, { path: CareerPath; gap: SkillGap }>();
+  for (const path of paths) {
+    for (const gap of gapsByPath.get(path.id) ?? []) {
+      uniqueGaps.set(gapText(path, gap).toLowerCase(), { path, gap });
+    }
+  }
+
+  const gapEmbeddings = await Promise.allSettled(
+    [...uniqueGaps].map(async ([key, { path, gap }]) => ({
+      key,
+      vector: (await embedText(gapText(path, gap))).vector,
+    })),
+  );
+
+  const gapVectors = new Map<string, number[]>();
+  for (const outcome of gapEmbeddings) {
+    if (outcome.status === "fulfilled") {
+      gapVectors.set(outcome.value.key, outcome.value.vector);
+    }
+  }
+  // Every gap failed to embed. Returning the paths untouched is the same
+  // outcome as "no course cleared the threshold" — courses enrich a plan and
+  // never decide whether it can be returned.
+  if (gapVectors.size === 0) return paths;
+
+  // Ranked once per distinct gap, not once per (path, gap). Each entry is a
+  // full scan of the pool — 1,500 courses × 1,024 dimensions — on the event
+  // loop of a request someone is waiting on, and two paths that share a target
+  // role share their gap text verbatim.
+  const rankedByGap = new Map<string, { course: PooledCourse; cosine: number }[]>();
+  for (const [key, vector] of gapVectors) {
+    rankedByGap.set(
+      key,
+      scorable
+        .map((course) => ({ course, cosine: cosineSimilarity(vector, course.vector) }))
+        .filter((candidate) => candidate.cosine >= MIN_COURSE_COSINE)
+        .sort((a, b) => b.cosine - a.cosine)
+        .slice(0, CANDIDATES_PER_GAP),
+    );
+  }
+
+  return paths.map((path) => {
+    const gaps = gapsByPath.get(path.id) ?? [];
+    const scored = new Map<string, SemanticCourse>();
+
+    for (const gap of gaps) {
+      for (const { course, cosine } of rankedByGap.get(gapText(path, gap).toLowerCase()) ??
+        []) {
+        record(scored, fromPooled(course), gap.skill, cosine);
+      }
+    }
+
+    const courses = selectFor(gaps, scored);
+    return courses.length > 0 ? { ...path, courses } : path;
+  });
+}
+
+/* -------------------------------------------------------------------------
+ * Retrieval from the live directory
+ * ---------------------------------------------------------------------- */
+
 /**
  * Attach semantic course recommendations to every path.
  *
- * Directory searches are batched by distinct three-gap query. Course and gap
- * vectors are cached across the whole run, matching the job pool's lifecycle.
+ * Prefers the precomputed pool (`lambda/courses-scraper/`) and falls back to
+ * querying SkillsFuture live when it is not deployed here, has never run, or
+ * was written by a different embedding model. The fallback is the original
+ * path and needs SSG credentials; the pool path needs none.
  */
 export async function withRecommendedCourses(paths: CareerPath[]): Promise<CareerPath[]> {
   if (paths.length === 0) return paths;
+
+  // A read failure degrades to the live directory rather than losing course
+  // recommendations altogether. The pool is a cost and accuracy optimisation,
+  // not the only way to answer — and the scraper's own alarm, not a silent
+  // gap in someone's plan, is where its health is supposed to surface.
+  let pool: CoursePool | null = null;
+  try {
+    pool = await getCoursePool();
+  } catch (error) {
+    console.warn("[courses] could not read the course pool:", error);
+  }
+
+  // A pool embedded at a different width is unusable, not merely less
+  // accurate — a cosine between vectors from different models is noise. The
+  // `courses` check is against a truncated or half-written object: it is
+  // parsed from 15 MB of S3 JSON, and `pool.courses.filter` on a non-array
+  // would throw from outside the try above.
+  if (pool && Array.isArray(pool.courses)) {
+    if (pool.embedding?.dimensions === EMBEDDING_DIMENSIONS) {
+      const enriched = await fromPool(paths, pool);
+      if (enriched) return enriched;
+    } else {
+      console.warn(
+        `[courses] pool was embedded by ${pool.embedding?.model} at ` +
+          `${pool.embedding?.dimensions} dimensions, not ${EMBEDDING_DIMENSIONS} — ` +
+          "falling back to the live directory.",
+      );
+    }
+  }
+
+  return fromLiveDirectory(paths);
+}
+
+/**
+ * The original path: one directory search per distinct three-gap query, a
+ * lexical prefilter, then up to 24 course embeddings for the whole run.
+ *
+ * Kept as the fallback rather than deleted, because the pool is optional
+ * infrastructure — a deployment without the scraper still recommends courses,
+ * just from a narrower candidate set and at the cost of a live API call.
+ */
+async function fromLiveDirectory(paths: CareerPath[]): Promise<CareerPath[]> {
   if (!hasSsgCredentials()) throw new SsgCredentialsError();
 
   const gapsByPath = new Map(
@@ -400,7 +608,7 @@ export async function withRecommendedCourses(paths: CareerPath[]): Promise<Caree
   }
 
   return paths.map((path) => {
-    const semanticByCourse = new Map<string, SemanticCourse>();
+    const scored = new Map<string, SemanticCourse>();
     const pathTargets = targets.filter((target) => target.pathId === path.id);
 
     for (const target of pathTargets) {
@@ -415,25 +623,13 @@ export async function withRecommendedCourses(paths: CareerPath[]): Promise<Caree
         const cosine = cosineSimilarity(gapVector, courseVector);
         if (cosine < MIN_COURSE_COSINE) continue;
 
-        let semantic = semanticByCourse.get(id);
-        if (!semantic) {
-          const recommendation = toRecommendation(course, []);
-          if (!recommendation) continue;
-          semantic = { recommendation, scores: new Map() };
-          semanticByCourse.set(id, semantic);
-        }
-        semantic.scores.set(target.gap.skill, cosine);
+        const recommendation = toRecommendation(course, []);
+        if (!recommendation) continue;
+        record(scored, recommendation, target.gap.skill, cosine);
       }
     }
 
-    for (const semantic of semanticByCourse.values()) {
-      semantic.recommendation.matchedSkills = [...semantic.scores.keys()];
-    }
-
-    const courses = chooseCourses(
-      gapsByPath.get(path.id) ?? [],
-      [...semanticByCourse.values()],
-    );
+    const courses = selectFor(gapsByPath.get(path.id) ?? [], scored);
     return courses.length > 0 ? { ...path, courses } : path;
   });
 }

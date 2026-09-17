@@ -46,6 +46,14 @@ output "jobs_bucket_name" {
   value = local.jobs_enabled ? aws_s3_bucket.jobs[0].bucket : null
 }
 
+# Set as S3_COURSES_BUCKET. The same bucket as above under a `courses/` prefix
+# — see the `market_bucket_enabled` note in jobs.tf — but emitted separately so
+# the app can tell "the course pool is deployed" from "the jobs feed is",
+# which are independent switches.
+output "courses_bucket_name" {
+  value = local.courses_enabled ? aws_s3_bucket.jobs[0].bucket : null
+}
+
 # output "iam_policy_arn" {
 #   value = aws_iam_policy.app_access.arn
 # }

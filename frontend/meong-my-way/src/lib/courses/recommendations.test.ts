@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EMBEDDING_DIMENSIONS } from "@/lib/bedrock/embeddings";
 import type { CareerPath } from "@/lib/contracts";
 import type { SsgCourse } from "@/lib/ssg/client";
 
 const mocks = vi.hoisted(() => ({
   embedText: vi.fn(),
   searchCourses: vi.fn(),
+  getCoursePool: vi.fn(),
 }));
 
 vi.mock("@/lib/bedrock/embeddings", async (importOriginal) => ({
@@ -17,8 +19,13 @@ vi.mock("@/lib/ssg/client", async (importOriginal) => ({
   searchCourses: mocks.searchCourses,
 }));
 vi.mock("@/lib/ssg/oauth", () => ({ hasSsgCredentials: () => true }));
+// Not merely for isolation: `.env.local` is loaded into the unit suite (see
+// vitest.config.mts), so an unmocked store would reach real S3 on every one of
+// these tests.
+vi.mock("./store", () => ({ getCoursePool: mocks.getCoursePool }));
 
 import { __testing, withRecommendedCourses } from "./recommendations";
+import type { CoursePool, PooledCourse } from "./types";
 
 function path(overrides: Partial<CareerPath> = {}): CareerPath {
   return {
@@ -69,9 +76,60 @@ function result(vector: number[]) {
   };
 }
 
+function pooled(
+  referenceNumber: string,
+  title: string,
+  description: string,
+  vector?: number[],
+): PooledCourse {
+  return {
+    referenceNumber,
+    title,
+    provider: "Example Polytechnic",
+    description,
+    url: `https://www.myskillsfuture.gov.sg/?courseReferenceNumber=${referenceNumber}`,
+    skills: [],
+    text: `${title}. ${description}`,
+    vector,
+    firstSeenAt: "2026-09-01T00:00:00Z",
+    lastSeenAt: "2026-09-17T00:00:00Z",
+  };
+}
+
+function pool(courses: PooledCourse[], dimensions = EMBEDDING_DIMENSIONS): CoursePool {
+  return {
+    schemaVersion: 1,
+    fetchedAt: "2026-09-17T00:00:00Z",
+    source: "skillsfuture",
+    embedding: { model: "amazon.titan-embed-text-v2:0", dimensions },
+    meta: {
+      keywords: 24,
+      failedKeywords: 0,
+      pagesFetched: 24,
+      courseCount: courses.length,
+      fetchedThisRun: courses.length,
+      carriedOver: 0,
+      embeddedThisRun: courses.length,
+      pendingEmbeddings: 0,
+      retentionDays: 30,
+    },
+    courses,
+  };
+}
+
+/** A unit vector at `EMBEDDING_DIMENSIONS`, pointing along one axis. */
+function axis(index: number): number[] {
+  const vector = new Array(EMBEDDING_DIMENSIONS).fill(0);
+  vector[index] = 1;
+  return vector;
+}
+
 beforeEach(() => {
   mocks.embedText.mockReset();
   mocks.searchCourses.mockReset();
+  mocks.getCoursePool.mockReset();
+  // The default for the live-directory tests below: no pool deployed.
+  mocks.getCoursePool.mockResolvedValue(null);
 });
 
 describe("semantic course recommendations", () => {
@@ -325,5 +383,144 @@ describe("semantic course recommendations", () => {
     expect(__testing.decodeText("<p>Build APIs &amp; typed clients.</p>")).toBe(
       "Build APIs & typed clients.",
     );
+  });
+});
+
+describe("the precomputed course pool", () => {
+  it("scores gaps against the pool without touching the directory", async () => {
+    mocks.getCoursePool.mockResolvedValue(
+      pool([
+        pooled("TGS-DATA-VIZ", "Data Visualisation with Tableau", "Build dashboards.", axis(0)),
+        pooled("TGS-SQL", "SQL Fundamentals", "Write analytical queries.", axis(1)),
+        pooled("TGS-STAKEHOLDERS", "Stakeholder Engagement", "Manage expectations.", axis(2)),
+      ]),
+    );
+    mocks.embedText.mockImplementation(async (text: string) => {
+      const lower = text.toLowerCase();
+      if (lower.includes("data visualisation")) return result(axis(0));
+      if (lower.includes("sql")) return result(axis(1));
+      return result(axis(2));
+    });
+
+    const [enriched] = await withRecommendedCourses([path()]);
+
+    expect(mocks.searchCourses).not.toHaveBeenCalled();
+    // One vector per distinct gap and nothing else — the courses arrived
+    // already embedded. The live path pays for those on every run.
+    expect(mocks.embedText).toHaveBeenCalledTimes(3);
+    expect(enriched.courses?.map((item) => item.referenceNumber)).toEqual([
+      "TGS-DATA-VIZ",
+      "TGS-SQL",
+      "TGS-STAKEHOLDERS",
+    ]);
+    expect(enriched.courses?.[0].matchedSkills).toEqual(["Data Visualisation"]);
+    expect(enriched.courses?.[0].provider).toBe("Example Polytechnic");
+  });
+
+  it("finds a semantic match no keyword search would have returned", async () => {
+    // Nothing lexical connects the gap to the course — it survives only
+    // because its vector is close, which is the whole point of the pool.
+    mocks.getCoursePool.mockResolvedValue(
+      pool([pooled("TGS-BI", "Power BI Essentials", "Report design.", axis(0))]),
+    );
+    mocks.embedText.mockResolvedValue(result(axis(0)));
+
+    const [enriched] = await withRecommendedCourses([
+      path({
+        gaps: [
+          {
+            skill: "Data Visualisation",
+            severity: "critical",
+            remedy: "Build a dashboard.",
+          },
+        ],
+      }),
+    ]);
+
+    expect(enriched.courses?.map((item) => item.referenceNumber)).toEqual(["TGS-BI"]);
+  });
+
+  it("falls back to the live directory when no course has a vector yet", async () => {
+    // The first scraper run, a throttled embedding budget, or a missing
+    // bedrock:InvokeModel grant. A pool that cannot answer must not take the
+    // place of one that could.
+    mocks.getCoursePool.mockResolvedValue(
+      pool([pooled("TGS-PENDING", "Data Visualisation", "Charts.")]),
+    );
+    mocks.searchCourses.mockResolvedValue({ courses: [], total: 0 });
+    mocks.embedText.mockResolvedValue(result(axis(0)));
+
+    await withRecommendedCourses([path()]);
+
+    expect(mocks.searchCourses).toHaveBeenCalled();
+  });
+
+  it("falls back when the pool object is truncated", async () => {
+    mocks.getCoursePool.mockResolvedValue({
+      ...pool([]),
+      courses: undefined,
+    } as unknown as CoursePool);
+    mocks.searchCourses.mockResolvedValue({ courses: [], total: 0 });
+    mocks.embedText.mockResolvedValue(result(axis(0)));
+
+    await expect(withRecommendedCourses([path()])).resolves.toBeDefined();
+    expect(mocks.searchCourses).toHaveBeenCalled();
+  });
+
+  it("falls back when the pool cannot be read at all", async () => {
+    mocks.getCoursePool.mockRejectedValue(new Error("AccessDenied"));
+    mocks.searchCourses.mockResolvedValue({ courses: [], total: 0 });
+    mocks.embedText.mockResolvedValue(result([1, 0, 0]));
+
+    await withRecommendedCourses([path()]);
+
+    expect(mocks.searchCourses).toHaveBeenCalled();
+  });
+
+  it("skips a course still waiting for its vector rather than scoring it zero", async () => {
+    mocks.getCoursePool.mockResolvedValue(
+      pool([
+        pooled("TGS-PENDING", "Data Visualisation Basics", "Charts."),
+        pooled("TGS-EMBEDDED", "Dashboard Design", "Dashboards.", axis(0)),
+      ]),
+    );
+    mocks.embedText.mockResolvedValue(result(axis(0)));
+
+    const [enriched] = await withRecommendedCourses([
+      path({
+        gaps: [
+          { skill: "Data Visualisation", severity: "critical", remedy: "Build one." },
+        ],
+      }),
+    ]);
+
+    expect(enriched.courses?.map((item) => item.referenceNumber)).toEqual([
+      "TGS-EMBEDDED",
+    ]);
+  });
+
+  it("keeps the semantic floor — an unrelated pool recommends nothing", async () => {
+    mocks.getCoursePool.mockResolvedValue(
+      pool([pooled("TGS-CELLS", "Cell Culture Systems", "Bioreactors.", axis(9))]),
+    );
+    mocks.embedText.mockResolvedValue(result(axis(0)));
+
+    const [enriched] = await withRecommendedCourses([path()]);
+
+    expect(enriched.courses).toBeUndefined();
+  });
+
+  it("falls back to the live directory when the pool was embedded differently", async () => {
+    mocks.getCoursePool.mockResolvedValue(
+      pool([pooled("TGS-OLD", "Data Visualisation", "Charts.", [1, 0, 0])], 3),
+    );
+    mocks.searchCourses.mockResolvedValue({ courses: [], total: 0 });
+    mocks.embedText.mockResolvedValue(result([1, 0, 0]));
+
+    await withRecommendedCourses([path()]);
+
+    // A cosine between vectors of different widths is noise, so the pool is
+    // unusable rather than merely less accurate.
+    expect(mocks.searchCourses).toHaveBeenCalled();
   });
 });

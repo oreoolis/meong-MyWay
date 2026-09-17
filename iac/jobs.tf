@@ -20,6 +20,16 @@ variable "enable_jobs_scraper" {
 
 locals {
   jobs_enabled = var.enable_jobs_scraper && var.create_iam
+
+  # The bucket below is shared with the courses scraper (iac/courses.tf), so it
+  # exists if either feed is on. Sharing rather than standing up a second
+  # bucket: both hold the same kind of thing — one shared, non-personal,
+  # derived market snapshot — so the encryption and lifecycle arguments made
+  # here cover both, and the scanner suppressions scoped to this file
+  # (.trivyignore.yaml, the CKV_AWS_145 skip below) do not have to be
+  # re-litigated for a near-identical second bucket. The name still says
+  # "jobs"; renaming it would destroy and recreate the pool for nothing.
+  market_bucket_enabled = local.jobs_enabled || local.courses_enabled
 }
 
 resource "aws_s3_bucket" "jobs" {
@@ -28,12 +38,12 @@ resource "aws_s3_bucket" "jobs" {
   # Trivy AWS-0132 entry in .trivyignore.yaml: public data, SSE-S3 declared
   # below deliberately.
   #checkov:skip=CKV_AWS_145:Public job-postings snapshot; SSE-S3 is the deliberate choice, see the encryption block below.
-  count  = local.jobs_enabled ? 1 : 0
+  count  = local.market_bucket_enabled ? 1 : 0
   bucket = "${var.project_name}-jobs-${data.aws_caller_identity.current.account_id}"
 }
 
 resource "aws_s3_bucket_public_access_block" "jobs" {
-  count                   = local.jobs_enabled ? 1 : 0
+  count                   = local.market_bucket_enabled ? 1 : 0
   bucket                  = aws_s3_bucket.jobs[0].id
   block_public_acls       = true
   block_public_policy     = true
@@ -59,7 +69,7 @@ resource "aws_s3_bucket_public_access_block" "jobs" {
 # raises rather than degrading to an empty pool — so a missing grant would stop
 # the feed publishing rather than quietly weaken it.
 resource "aws_s3_bucket_server_side_encryption_configuration" "jobs" {
-  count  = local.jobs_enabled ? 1 : 0
+  count  = local.market_bucket_enabled ? 1 : 0
   bucket = aws_s3_bucket.jobs[0].id
 
   rule {
@@ -72,13 +82,25 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "jobs" {
 # Run archives are for debugging a bad snapshot, which stops being useful
 # quickly. `latest.json` sits outside the prefix and is never expired.
 resource "aws_s3_bucket_lifecycle_configuration" "jobs" {
-  count  = local.jobs_enabled ? 1 : 0
+  count  = local.market_bucket_enabled ? 1 : 0
   bucket = aws_s3_bucket.jobs[0].id
 
   rule {
     id     = "expire-run-archives"
     status = "Enabled"
     filter { prefix = "jobs/runs/" }
+    expiration { days = 30 }
+  }
+
+  # Same argument for the courses feed's archives, which are larger — every
+  # course carries its embedding. Declared unconditionally rather than gated on
+  # `courses_enabled`: a prefix filter matching nothing costs nothing, and a
+  # conditional rule here would mean toggling the courses scraper rewrites the
+  # jobs feed's lifecycle policy.
+  rule {
+    id     = "expire-course-run-archives"
+    status = "Enabled"
+    filter { prefix = "courses/runs/" }
     expiration { days = 30 }
   }
 }
