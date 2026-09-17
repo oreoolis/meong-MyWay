@@ -7,6 +7,7 @@ import type {
   ResumeRewrite,
 } from "@/lib/contracts";
 import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import { uniqueResumeRewrites } from "@/lib/resume/rewrites";
 
 import { profileDigest } from "./digest";
 
@@ -108,9 +109,11 @@ export async function improveResume(
     overallScore: Math.min(100, Math.max(0, Math.round(value.overallScore ?? 0))),
     verdict: value.verdict?.trim() || "",
     strengths: value.strengths ?? [],
-    rewrites: (value.rewrites ?? [])
-      .map(normaliseRewrite)
-      .filter((rewrite): rewrite is ResumeRewrite => rewrite !== null),
+    rewrites: uniqueResumeRewrites(
+      (value.rewrites ?? [])
+        .map(normaliseRewrite)
+        .filter((rewrite): rewrite is ResumeRewrite => rewrite !== null),
+    ),
     missingKeywords: value.missingKeywords ?? [],
     formattingNotes: value.formattingNotes ?? [],
   };

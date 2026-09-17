@@ -21,6 +21,7 @@ import { SpecularButton } from "@/components/ui/specular-button";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { ResultsToolbar } from "@/components/ui/results-toolbar";
 import { cn, formatCompactMoney } from "@/lib/utils";
+import { resumeRewriteIdentity, uniqueResumeRewrites } from "@/lib/resume/rewrites";
 
 /**
  * The "further my career" branch.
@@ -241,9 +242,14 @@ export function AdvisorStage({
     [plan.paths],
   );
 
-  const rewrites = showAllRewrites
-    ? improvement.rewrites
-    : improvement.rewrites.slice(0, 3);
+  // Older stored analyses can predate server-side de-duplication, so keep the
+  // display defensive as well. This also gives every rendered edit a stable,
+  // collision-free key when several edits target the same section or line.
+  const uniqueRewrites = useMemo(
+    () => uniqueResumeRewrites(improvement.rewrites),
+    [improvement.rewrites],
+  );
+  const rewrites = showAllRewrites ? uniqueRewrites : uniqueRewrites.slice(0, 3);
 
   return (
     <div className={cn(styles.workspace, "mw-rise mx-auto w-full max-w-6xl")}>
@@ -417,11 +423,11 @@ export function AdvisorStage({
             <Card className="mt-5 p-5">
               <ul>
                 {rewrites.map((rewrite) => (
-                  <RewriteRow key={`${rewrite.section}-${rewrite.before}`} rewrite={rewrite} />
+                  <RewriteRow key={resumeRewriteIdentity(rewrite)} rewrite={rewrite} />
                 ))}
               </ul>
 
-              {improvement.rewrites.length > 3 ? (
+              {uniqueRewrites.length > 3 ? (
                 <Button
                   variant="ghost"
                   size="sm"
@@ -429,7 +435,7 @@ export function AdvisorStage({
                   aria-expanded={showAllRewrites}
                   onClick={() => setShowAllRewrites((shown) => !shown)}
                 >
-                  {showAllRewrites ? "Show fewer edits" : `Show ${improvement.rewrites.length - 3} more ${improvement.rewrites.length === 4 ? "edit" : "edits"}`}
+                  {showAllRewrites ? "Show fewer edits" : `Show ${uniqueRewrites.length - 3} more ${uniqueRewrites.length === 4 ? "edit" : "edits"}`}
                 </Button>
               ) : null}
             </Card>
