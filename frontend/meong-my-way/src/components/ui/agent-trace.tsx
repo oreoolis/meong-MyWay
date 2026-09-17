@@ -61,7 +61,7 @@ function AgentThoughts({ thoughts }: { thoughts: string[] }) {
  * highlight as a step row's own running indicator (`StepRow` below), just
  * spanning the card, so the honest version costs no new CSS.
  */
-function SkeletonBar({ className }: { className?: string }) {
+export function SkeletonBar({ className }: { className?: string }) {
   return (
     <div
       role="progressbar"
