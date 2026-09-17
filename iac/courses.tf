@@ -1,4 +1,4 @@
-# The SkillsFuture course pool: a scraper on a 24-hour schedule against the
+# The SkillsFuture course pool: a scraper on a weekly schedule against the
 # SSG-WSG course directory, and the Titan embedding it attaches to every course
 # before publishing.
 #
@@ -13,7 +13,7 @@
 #      candidate courses on the critical path of every analysis.
 #   2. SSG OAuth credentials, because unlike MyCareersFuture the directory is
 #      not an open GET.
-#   3. A daily schedule and a longer timeout. A course catalogue moves far
+#   3. A weekly schedule and a longer timeout. A course catalogue moves far
 #      more slowly than a job board, and a cold pool is ~1,500 embeddings.
 #
 # Gated behind `enable_courses_scraper` AND `create_iam`, same as the jobs
@@ -200,14 +200,18 @@ resource "aws_lambda_function" "courses_scraper" {
   depends_on = [aws_cloudwatch_log_group.courses_scraper]
 }
 
-# Daily, against the jobs feed's twelve hours. A course catalogue is reference
+# Weekly, against the jobs feed's twelve hours. A course catalogue is reference
 # data — a provider adds a new course over weeks, not hours — and every extra
 # run is another sweep of the directory for a pool that will barely have moved.
+#
+# `COURSES_RETENTION_DAYS` is 30, so a withdrawn course must be absent from
+# four consecutive runs before it expires. That is the intended slack: it keeps
+# one failed sweep from emptying the pool.
 resource "aws_cloudwatch_event_rule" "courses_scraper" {
   count               = local.courses_enabled ? 1 : 0
-  name                = "${var.project_name}-courses-scraper-24h"
-  description         = "Refresh the SkillsFuture course pool and its embeddings daily."
-  schedule_expression = "rate(24 hours)"
+  name                = "${var.project_name}-courses-scraper-weekly"
+  description         = "Refresh the SkillsFuture course pool and its embeddings weekly."
+  schedule_expression = "rate(7 days)"
 }
 
 resource "aws_cloudwatch_event_target" "courses_scraper" {
@@ -232,8 +236,18 @@ resource "aws_lambda_permission" "courses_scraper" {
 # The failure this catches is quiet by construction: a stale pool still
 # produces recommendations, just increasingly wrong ones, and the app falls
 # back to the live directory only when the pool is missing entirely — not when
-# it is months old. Two missed daily runs is the point at which nobody would
-# otherwise notice.
+# it is months old.
+#
+# `notBreaching`, unlike the jobs alarm's `breaching`. That alarm fires on
+# missing data because a 12-hour schedule puts a datapoint in every period; a
+# weekly schedule leaves six of every seven daily periods empty, so treating
+# absence as failure would hold this alarm permanently ON and train everyone to
+# ignore it. CloudWatch caps `period` at 86400, so a one-period-per-run alarm
+# is not available either.
+#
+# ponytail: this therefore catches a run that FAILS, not a run that never
+# fired. If a silent schedule matters, add a separate alarm on the
+# `Invocations` metric summed over a week; the Errors alarm alone cannot see it.
 resource "aws_cloudwatch_metric_alarm" "courses_scraper_failing" {
   count               = local.courses_enabled ? 1 : 0
   alarm_name          = "${var.project_name}-courses-scraper-failing"
@@ -241,10 +255,10 @@ resource "aws_cloudwatch_metric_alarm" "courses_scraper_failing" {
   metric_name         = "Errors"
   statistic           = "Sum"
   period              = 86400
-  evaluation_periods  = 2
+  evaluation_periods  = 1
   threshold           = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
-  treat_missing_data  = "breaching"
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
     FunctionName = aws_lambda_function.courses_scraper[0].function_name
