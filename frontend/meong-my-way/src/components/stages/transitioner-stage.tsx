@@ -17,17 +17,9 @@ import type {
   CareerSwap,
   SwapRequestState,
 } from "@/lib/contracts";
-import {
-  Button,
-  Card,
-  Chip,
-  ProgressBar,
-  SectionLabel,
-} from "@/components/ui/primitives";
+import { Button, Card, Chip, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
-import { CheckIcon } from "@/components/ui/icons";
-import { SWAPPER_ESTIMATE_MS } from "@/lib/agents/timings";
-import { useEstimatedProgress } from "@/lib/use-estimated-progress";
+import { SkeletonBar } from "@/components/ui/agent-trace";
 import { cn } from "@/lib/utils";
 
 /**
@@ -173,19 +165,19 @@ function TalkToSomeone({ swap }: { swap: CareerSwap }) {
 }
 
 /**
- * What the swapper is actually doing, in the order it does it.
+ * What the swapper does, in the order it does it.
  *
- * These are the agent's real phases — `findCareerSwaps` searches the framework
- * for out-of-sector roles, re-ranks them against the resume embedding, then
- * asks the model to write the routes up (falling back to reasoning the
- * destinations outright when the framework returns nothing to rank). They are
- * advanced on a timer rather than by events, because the agent is one HTTP
- * round trip and reports nothing in between.
+ * `findCareerSwaps` searches the framework for out-of-sector roles, re-ranks
+ * them against the resume embedding, then asks the model to write the routes
+ * up — falling back to reasoning the destinations outright when the framework
+ * returns nothing to rank.
  *
- * Timed rather than measured is a real limitation and worth naming: if the
- * agent stalls in phase one, this still walks to phase three. What it buys is
- * a wait that reads as work with a shape rather than as a hang, and the phases
- * are truthful about what the agent does even when the timing drifts.
+ * Listed, not tracked. The agent is one HTTP round trip and reports nothing in
+ * between, so there is no way to know which of these is running. An earlier
+ * version walked a tick down the list on a timer: a checkmark asserts a step
+ * finished, and that one asserted it on a 34-second constant rather than on
+ * anything the agent said. If the agent stalled in step one the display still
+ * reported steps one and two complete.
  */
 const SWAP_PHASES = [
   "Searching sectors outside your own",
@@ -194,19 +186,6 @@ const SWAP_PHASES = [
 ] as const;
 
 function SwapProgress() {
-  const progress = useEstimatedProgress({
-    active: true,
-    done: false,
-    estimateMs: SWAPPER_ESTIMATE_MS,
-  });
-
-  // Phases divide the estimate evenly, and the last one holds through any
-  // overrun — "writing up" is where a slow run actually is.
-  const phase = Math.min(
-    SWAP_PHASES.length - 1,
-    Math.floor((progress / 100) * SWAP_PHASES.length),
-  );
-
   return (
     <Card className="mt-8 p-6">
       <p className="text-[15px] font-semibold tracking-tight text-ink">
@@ -216,56 +195,19 @@ function SwapProgress() {
         Matching your experience to new sectors. Your other results are saved.
       </p>
 
-      <ProgressBar
-        className="mt-5"
-        value={progress}
-        active
-        showValue={false}
-        label="Career swapper progress"
-        hint="Usually about 30 seconds"
-      />
+      <p className="mt-5 text-[12px] text-ink-muted">Usually about 30 seconds</p>
+      <SkeletonBar className="mt-1.5" />
 
       <ol className="mt-5 space-y-2.5">
-        {SWAP_PHASES.map((label, index) => {
-          const status =
-            index < phase ? "done" : index === phase ? "running" : "pending";
-
-          return (
-            <li key={label} className="flex items-center gap-3">
-              <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                {status === "done" ? (
-                  <CheckIcon className="h-4 w-4 text-good" />
-                ) : status === "running" ? (
-                  <span
-                    aria-hidden="true"
-                    className="mw-halo h-2 w-2 rounded-full bg-accent"
-                  />
-                ) : (
-                  <span
-                    aria-hidden="true"
-                    className="h-1.5 w-1.5 rounded-full bg-baseline"
-                  />
-                )}
-              </span>
-
-              <p
-                className={cn(
-                  "text-[13.5px] leading-5",
-                  status === "pending" ? "text-ink-muted" : "text-ink",
-                )}
-              >
-                {label}
-                <span className="sr-only">
-                  {status === "done"
-                    ? ", complete"
-                    : status === "running"
-                      ? ", in progress"
-                      : ", pending"}
-                </span>
-              </p>
-            </li>
-          );
-        })}
+        {SWAP_PHASES.map((label) => (
+          <li key={label} className="flex items-center gap-3">
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-baseline"
+            />
+            <p className="text-[13.5px] leading-5 text-ink-2">{label}</p>
+          </li>
+        ))}
       </ol>
     </Card>
   );

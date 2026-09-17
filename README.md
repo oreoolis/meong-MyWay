@@ -725,20 +725,21 @@ The tab strip is hand-rolled rather than pulled from a component library, becaus
 
 ### Progress that does not lie
 
-Two different bars, because two different things are known.
+One rule: a bar states a number only when something measured it.
 
-**Agent cards** show a bar only where there is a real value to show. Idle is 0, done is 100, and a *running* agent gets a skeleton bar — track plus travelling highlight, no percentage.
+**Agent cards** show a value only where there is one. Idle is 0, done is 100, and a *running* agent gets a skeleton bar — track plus travelling highlight, no percentage.
 
 It used to compute one: `done / total` steps with a running step counting half. That number had nothing behind it. Nothing reports a step's internal progress, so "half" was a shape chosen to stop the bar freezing, dressed up as a measurement. A card now says "working" without also claiming to know how nearly done it is.
 
 The thing worth watching during a run moved to `react-rotating-text` in each card: **what the agent is actually doing**, typed out line by line. Those lines are the agents' real tool calls — "Checking whether 'Growth Ops Lead' is a real job title", "Searching the Skills Framework for 'Analyst' roles" — streamed over the same NDJSON channel as the phase events (`lib/analysis/progress.ts`), tagged with the agent they belong to so concurrent specialists land in the right card. The Questionnaire Agent shows none, because it makes no lookups and inventing some would be the same lie in a different widget.
 
-**The career swapper** is a single round trip that reports nothing between "started" and "finished", so `useEstimatedProgress` projects from the measured ~32s (`lib/agents/timings.ts`). Two rules keep the projection honest:
+**The career swapper** gets the same skeleton bar, on both the results fork and the transitioner page. It is a single round trip that reports nothing between "started" and "finished", so there is no number to show and it no longer invents one.
 
-1. **It cannot reach 100 on its own.** The curve eases to 92%, then creeps toward 98% and stops. 100 is *derived* from the request completing, so there is no state where the bar is full but the work is not. A bar that fills and then sits there has stated something false, which is strictly worse than no bar.
-2. **Overrun stays visible.** Past the estimate it keeps inching rather than freezing, so a slow run looks slow. The words beside it say "usually about 30 seconds", because the bar is the shape of the wait and the sentence is the claim about it.
+It used to. `useEstimatedProgress` projected a curve from a measured ~32s, eased to 92%, and never self-completed — carefully built rules for a value that was still the shape of an *average* wait presented as a measurement of *this* run. Both the hook and the constant it read are deleted; nothing imports them any more.
 
-The transitioner page also narrates the swapper's three real phases: search sectors, score against the resume, write up the routes. Those are advanced **on a timer, not by events**, so if the agent stalls in phase one the display still walks to phase three. That is a real limitation of having no progress channel, and it is noted in the code rather than papered over.
+The transitioner page still names the swapper's three real phases — search sectors, score against the resume, write up the routes — but as a plain list, not a checklist. Ticking them off ran on the same timer, and a checkmark asserts a step *finished*: if the agent stalled in step one, the display reported steps one and two complete. Saying what the agent does is truthful; claiming to know where it has got to is not.
+
+What replaces a projection is the thing the agents do report. The five with tool loops stream their real lookups into their cards, so a live run shows work rather than a curve. The swapper is started from the results fork while the user reads, which is also why its wait is rarely the one they notice.
 
 ---
 
