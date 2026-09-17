@@ -1,4 +1,4 @@
-import { AwsConfigurationError } from "@/lib/aws/clients";
+import { AwsConfigurationError, isTransientAwsError } from "@/lib/aws/clients";
 import { authJson, authenticateRequest } from "@/lib/auth/route-guard";
 import { AgentReasoningError } from "@/lib/bedrock/reason";
 import { runCareerSwap } from "@/lib/agents/orchestrator";
@@ -59,6 +59,9 @@ export async function POST(request: Request) {
     }
 
     console.error("[api/analysis/swap] POST failed:", error);
-    return authJson({ error: "Could not find alternative careers." }, 500);
+    return authJson(
+      { error: "Could not find alternative careers.", retryable: isTransientAwsError(error) },
+      500,
+    );
   }
 }

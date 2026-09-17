@@ -1,5 +1,5 @@
 import { progressResponse } from "@/lib/analysis/progress";
-import { AwsConfigurationError } from "@/lib/aws/clients";
+import { AwsConfigurationError, isTransientAwsError } from "@/lib/aws/clients";
 import { authJson, authenticateRequest } from "@/lib/auth/route-guard";
 import { AgentReasoningError } from "@/lib/bedrock/reason";
 import { completeIntake } from "@/lib/resume/intake";
@@ -58,7 +58,10 @@ export async function GET(request: Request) {
     if (configured) return configured;
 
     console.error("[api/analysis] GET failed:", error);
-    return authJson({ error: "Could not load your analysis." }, 500);
+    return authJson(
+      { error: "Could not load your analysis.", retryable: isTransientAwsError(error) },
+      500,
+    );
   }
 }
 
@@ -109,8 +112,16 @@ export async function POST(request: Request) {
         );
       }
 
+      // A dropped or reset connection to S3/DynamoDB/Bedrock reads exactly
+      // like this — no AgentReasoningError wrapper, because it never reached
+      // the model call reason.ts guards. Without this check it is
+      // indistinguishable from a genuine bug and the client hides the retry
+      // button for a failure that usually succeeds on the next attempt.
       console.error("[api/analysis] POST failed:", error);
-      return authJson({ error: "Could not analyse your resume." }, 500);
+      return authJson(
+        { error: "Could not analyse your resume.", retryable: isTransientAwsError(error) },
+        500,
+      );
     }
   });
 }
