@@ -1,9 +1,56 @@
+"use client";
+
+import ReactRotatingText from "react-rotating-text";
+
 import type { AgentStep } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
 import { CheckIcon } from "./icons";
 import { ProgressBar } from "./primitives";
 
 export type AgentCardState = "idle" | "running" | "done";
+
+/**
+ * What the agent said while it was working, typed out one line at a time.
+ *
+ * Only the Career Planner produces these: it is the one agent that chooses its
+ * own lookups, so it is the only one with a decision to narrate. Every other
+ * card renders exactly as before.
+ *
+ * The text is model output steered by an uploaded résumé, so it is rendered as
+ * text and never as markup, and each line is clipped — a model that decides to
+ * write an essay must not be able to resize the card.
+ */
+function AgentThoughts({ thoughts }: { thoughts: string[] }) {
+  if (thoughts.length === 0) return null;
+
+  const items = thoughts.map((thought) =>
+    thought.length > 110 ? `${thought.slice(0, 110).trimEnd()}…` : thought,
+  );
+
+  return (
+    <div className="mt-3 rounded-xl bg-raised px-3 py-2">
+      <p className="text-[10.5px] font-medium uppercase tracking-wide text-ink-muted">
+        Thinking
+      </p>
+      {/* `react-rotating-text` reads `items` once on mount and has no update
+          path, so the length is the remount key: a new thought restarts the
+          rotation with the full list rather than being dropped. */}
+      <p
+        aria-live="polite"
+        className="mt-0.5 min-h-[2.5rem] font-mono text-[11.5px] leading-5 text-ink-2"
+      >
+        <ReactRotatingText
+          key={items.length}
+          items={items}
+          typingInterval={22}
+          deletingInterval={8}
+          pause={2600}
+          emptyPause={200}
+        />
+      </p>
+    </div>
+  );
+}
 
 /**
  * How far through its steps an agent is.
@@ -36,6 +83,7 @@ export function AgentTrace({
   icon,
   steps,
   state,
+  thoughts = [],
   className,
 }: {
   name: string;
@@ -43,6 +91,8 @@ export function AgentTrace({
   icon: React.ReactNode;
   steps: AgentStep[];
   state: AgentCardState;
+  /** Live reasoning, newest last. Only the planner ever supplies any. */
+  thoughts?: string[];
   className?: string;
 }) {
   return (
@@ -90,6 +140,8 @@ export function AgentTrace({
         active={state === "running"}
         label={`${name} progress`}
       />
+
+      {state === "running" ? <AgentThoughts thoughts={thoughts} /> : null}
 
       {steps.length > 0 ? (
         <ol className="mt-3 space-y-0.5">

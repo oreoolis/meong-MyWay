@@ -1,10 +1,15 @@
 import "server-only";
 
 import type { CareerPath, CareerPlan, ResumeProfile } from "@/lib/contracts";
-import { reasonJson, type ModelUsage } from "@/lib/bedrock/reason";
+import {
+  reasonJson,
+  reasonJsonWithTools,
+  type ModelUsage,
+} from "@/lib/bedrock/reason";
 import { listSectors, type SsgSector } from "@/lib/ssg/client";
 
 import { profileDigest } from "./digest";
+import { PLANNER_TOOLS } from "./planner-tools";
 
 /**
  * Agent 2 — General Career Planner.
@@ -85,6 +90,22 @@ Guidance:
 
 }
 
+/**
+ * Appended only on the agentic path, so the single-shot fallback keeps the
+ * exact prompt it has always had.
+ *
+ * Deliberately not "call every tool". A model told to verify everything spends
+ * the turn budget on titles it already knew and never reaches the ones it
+ * guessed. Naming *when* a check is worth a turn is what keeps the loop inside
+ * four turns and the run inside its cost ceiling.
+ */
+const TOOL_GUIDANCE = `
+You have tools. Use them where you would otherwise be guessing:
+- Before committing to a job title you are not certain exists in Singapore's Skills Framework, call find_job_role. If it returns no match, pick a different title.
+- Take every salary figure from find_job_role's published band. Never state a band you have not looked up.
+- For the gaps you are least sure are trainable, call find_courses.
+Two or three lookups is right. Do not verify titles you already know, and do not call a tool twice with the same argument. When you have what you need, call emit_result.`;
+
 type PlannerPayload = {
   sectorId?: string;
   sectorTitle?: string;
@@ -148,7 +169,14 @@ function normalisePath(raw: CareerPath, index: number): CareerPath {
   };
 }
 
-export async function planCareers(profile: ResumeProfile): Promise<PlanResult> {
+export async function planCareers(
+  profile: ResumeProfile,
+  /**
+   * Live commentary for the progress stream. Its presence does not enable the
+   * loop — the loop always runs — it only decides whether anyone is watching.
+   */
+  onThought?: (text: string) => void,
+): Promise<PlanResult> {
   // The sector taxonomy is the one framework lookup the planner needs, and it
   // is identical for every user — the client's revalidate window means most
   // runs pay nothing for it.
@@ -162,10 +190,23 @@ export async function planCareers(profile: ResumeProfile): Promise<PlanResult> {
     sectors = [];
   }
 
-  const { value, usage } = await reasonJson<PlannerPayload>({
+  const prompt = buildPrompt(profile, sectors);
+
+  // The agentic path, then the original one.
+  //
+  // `runAnalysis` throws when the planner fails, so the planner is the whole
+  // pipeline — which is exactly why the loop is not allowed to be the only way
+  // to get a plan. A tool outage, a turn-cap hit or a model that will not stop
+  // looking things up costs accuracy here, never the run.
+  const { value, usage } = await reasonJsonWithTools<PlannerPayload>({
     agent: "planner",
     system: SYSTEM,
-    prompt: buildPrompt(profile, sectors),
+    prompt: `${prompt}\n${TOOL_GUIDANCE}`,
+    tools: PLANNER_TOOLS,
+    // Four turns is the cost ceiling. Measured intent: two or three lookups
+    // then the answer.
+    maxTurns: 4,
+    onThought,
     // 4096 was too small: this schema asks for exactly 4 `CareerPath` objects
     // — the same per-item shape (rationale, gaps, milestones, employers) that
     // made the career swapper measure 5,227-6,293 output tokens and move to
@@ -175,6 +216,15 @@ export async function planCareers(profile: ResumeProfile): Promise<PlanResult> {
     // swapper's ceiling rather than guessing a smaller number that might just
     // move the failure to the next verbose resume.
     maxTokens: 8192,
+  }).catch(async (error) => {
+    console.warn("[planner] tool loop failed, falling back to single-shot:", error);
+    onThought?.("Verification unavailable — planning from the résumé alone.");
+    return reasonJson<PlannerPayload>({
+      agent: "planner",
+      system: SYSTEM,
+      prompt,
+      maxTokens: 8192,
+    });
   });
 
   const plan: CareerPlan = {
