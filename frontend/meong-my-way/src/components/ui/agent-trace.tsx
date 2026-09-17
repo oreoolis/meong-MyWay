@@ -53,24 +53,24 @@ function AgentThoughts({ thoughts }: { thoughts: string[] }) {
 }
 
 /**
- * How far through its steps an agent is.
+ * The card's own bar while its agent is running: no percentage, because
+ * nothing reports one.
  *
- * A running step counts as half. That is not a claim about the step's internal
- * state — nothing reports that — it is what stops the bar sitting still for
- * the whole of a step and then jumping a third of the way at once. Half is the
- * expected value of a step you know has started and not finished, so it is
- * also the reading that is least wrong on average.
+ * This replaces a bar that used to fake a value — a running step counted as
+ * half-done, a number with no claim behind it. Same track and `mw-sweep`
+ * highlight as a step row's own running indicator (`StepRow` below), just
+ * spanning the card, so the honest version costs no new CSS.
  */
-function stepProgress(steps: AgentStep[]): number {
-  if (steps.length === 0) return 0;
-
-  const credit = steps.reduce((total, step) => {
-    if (step.status === "done") return total + 1;
-    if (step.status === "running") return total + 0.5;
-    return total;
-  }, 0);
-
-  return (credit / steps.length) * 100;
+function SkeletonBar({ className }: { className?: string }) {
+  return (
+    <div
+      role="progressbar"
+      aria-label="Working"
+      className={cn("relative w-full overflow-hidden rounded-full bg-track h-1", className)}
+    >
+      <span aria-hidden="true" className="mw-sweep absolute inset-0 overflow-hidden rounded-full" />
+    </div>
+  );
 }
 
 /**
@@ -132,14 +132,19 @@ export function AgentTrace({
 
       {/* The card's own bar, above the steps it summarises. Present in every
           state so the row of cards keeps one baseline and does not reflow as
-          agents start and finish. */}
-      <ProgressBar
-        className="mt-4"
-        size="sm"
-        value={state === "done" ? 100 : stepProgress(steps)}
-        active={state === "running"}
-        label={`${name} progress`}
-      />
+          agents start and finish. Idle and done are real values (nothing
+          started, everything finished); running has no real value to show, so
+          it gets the skeleton above instead of a guessed number. */}
+      {state === "running" ? (
+        <SkeletonBar className="mt-4" />
+      ) : (
+        <ProgressBar
+          className="mt-4"
+          size="sm"
+          value={state === "done" ? 100 : 0}
+          label={`${name} progress`}
+        />
+      )}
 
       {state === "running" ? <AgentThoughts thoughts={thoughts} /> : null}
 
