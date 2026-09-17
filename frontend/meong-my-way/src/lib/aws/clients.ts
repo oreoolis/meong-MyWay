@@ -66,6 +66,27 @@ export function getJobsConfig(): { bucket: string; key: string } | null {
 }
 
 /**
+ * Where the SkillsFuture course pool lives, if its scraper is deployed.
+ *
+ * In practice this is the jobs bucket under a `courses/` prefix — both hold
+ * the same kind of thing, one shared non-personal derived market snapshot, so
+ * `iac/jobs.tf`'s encryption and lifecycle arguments cover both. It is read
+ * from its own variable anyway, and deliberately does NOT fall back to
+ * `S3_JOBS_BUCKET`: the two scrapers are independent switches, and turning the
+ * courses one off leaves its last `latest.json` sitting in the shared bucket.
+ * A fallback would keep scoring against that frozen pool forever, which is
+ * exactly the silent-staleness failure the separate variable prevents.
+ *
+ * `null` for the same reason as `getJobsConfig()`: the scraper is optional and
+ * the app is fully functional without it, so its absence must not turn every
+ * storage-touching request into an `AwsConfigurationError`.
+ */
+export function getCoursesConfig(): { bucket: string; key: string } | null {
+  const bucket = process.env.S3_COURSES_BUCKET?.trim();
+  return bucket ? { bucket, key: "courses/latest.json" } : null;
+}
+
+/**
  * Which models the agents call, and where.
  *
  * The region is separate from the storage region because Bedrock is not
