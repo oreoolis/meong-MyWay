@@ -15,9 +15,8 @@ import styles from "@/components/ui/career-workspace.module.css";
 import type { AnalysisBundle, MatchedRole, ResumeRewrite } from "@/lib/contracts";
 import { Button, Card, Meter, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths, CourseRecommendations } from "@/components/ui/compare-paths";
-import { OpeningBadges, openingsLabel } from "@/components/ui/opening-badges";
+import { OpeningBadges } from "@/components/ui/opening-badges";
 import { SkillGapList } from "@/components/ui/skill-gap-list";
-import { SpecularButton } from "@/components/ui/specular-button";
 import { ArrowRightIcon } from "@/components/ui/icons";
 import { ResultsToolbar } from "@/components/ui/results-toolbar";
 import { cn, formatCompactMoney } from "@/lib/utils";
@@ -52,59 +51,42 @@ function SuggestedRewrite({ text }: { text: string }) {
   });
 }
 
-type RoleDisclosureKey = "openings" | "rationale" | "guidance" | "courses";
+type RoleDisclosureKey = "openings" | "guidance" | "courses";
+type OpenRoleDisclosure = { roleId: string; key: RoleDisclosureKey } | null;
 
 /**
- * What is worth digging into for a matched role — vacancies, why it fits, how
- * to raise the match, and the courses that would raise it — as a row of
+ * What is worth digging into for a matched role — vacancies, how to raise the
+ * match, and the courses that would raise it — as a row of
  * toggles instead of stacked disclosures, so a role card reads as one
- * scannable line. Independent toggles, not tabs: any combination can be open
- * at once, same as the `<details>` elements this replaced.
+ * scannable line. They behave as a compact accordion: opening one closes the
+ * previous panel, which keeps a long role list from expanding unpredictably.
  *
  * Absent for a run stored before the advisor produced any of them, which is
  * why each side is optional and the whole row disappears when there is nothing
  * truthful to put in it.
  */
-function RoleDisclosures({ role }: { role: MatchedRole }) {
+function RoleDisclosures({
+  role,
+  open,
+  onToggle,
+}: {
+  role: MatchedRole;
+  open: RoleDisclosureKey | null;
+  onToggle: (key: RoleDisclosureKey) => void;
+}) {
   const strengths = role.strengths ?? [];
   const gaps = role.gaps ?? [];
   const openings = role.openings ?? [];
   const courses = role.courses ?? [];
 
   const hasOpenings = openings.length > 0;
-  const hasRationale = Boolean(role.rationale);
   const hasGuidance = strengths.length > 0 || gaps.length > 0;
   // Its own toggle rather than a section inside "how to raise this match":
   // that panel names what is missing, this one is what to enrol in, and
   // someone who already knows their gaps wants the second without the first.
   const hasCourses = courses.length > 0;
 
-  const [open, setOpen] = useState<Set<RoleDisclosureKey>>(new Set());
-
-  if (!hasOpenings && !hasRationale && !hasGuidance && !hasCourses) return null;
-
-  const toggle = (key: RoleDisclosureKey) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-
-  // Tuned for this page's light surface, where the component's own defaults
-  // (a white edge stroke and white label) were built for a dark one and read
-  // as nearly invisible. Open state fills with the accent instead of relying
-  // on the sweep alone, since the highlight only shows near the pointer.
-  const toneFor = (key: RoleDisclosureKey) => {
-    const isOpen = open.has(key);
-    return {
-      textColor: isOpen ? "#ffffff" : "#111827",
-      baseColor: isOpen ? "#3b82f6" : "#d1d5db",
-      lineColor: "#3b82f6",
-      tint: "#3b82f6",
-      tintOpacity: isOpen ? 1 : 0,
-    };
-  };
+  if (!hasOpenings && !hasGuidance && !hasCourses) return null;
 
   // Replacing `<details>/<summary>` cost the free disclosure relationship
   // that nesting gave assistive tech — the panel is a sibling now, not a
@@ -115,82 +97,52 @@ function RoleDisclosures({ role }: { role: MatchedRole }) {
     <>
       <div className="mt-3 flex flex-wrap gap-2.5">
         {hasOpenings ? (
-          <SpecularButton
-            size="sm"
-            radius={999}
-            aria-expanded={open.has("openings")}
+          <button
+            type="button"
+            className={styles.roleDisclosure}
+            aria-expanded={open === "openings"}
             aria-controls={panelId("openings")}
-            onClick={() => toggle("openings")}
-            {...toneFor("openings")}
+            onClick={() => onToggle("openings")}
           >
-            {openingsLabel(openings.length)}
-          </SpecularButton>
-        ) : null}
-
-        {hasRationale ? (
-          <SpecularButton
-            size="sm"
-            radius={999}
-            aria-expanded={open.has("rationale")}
-            aria-controls={panelId("rationale")}
-            onClick={() => toggle("rationale")}
-            {...toneFor("rationale")}
-          >
-            Why this fits
-          </SpecularButton>
-        ) : null}
-
-        {hasGuidance ? (
-          <SpecularButton
-            size="sm"
-            radius={999}
-            aria-expanded={open.has("guidance")}
-            aria-controls={panelId("guidance")}
-            onClick={() => toggle("guidance")}
-            {...toneFor("guidance")}
-          >
-            How to raise this match
-          </SpecularButton>
+            Job Openings ({openings.length})
+          </button>
         ) : null}
 
         {hasCourses ? (
-          <SpecularButton
-            size="sm"
-            radius={999}
-            aria-expanded={open.has("courses")}
+          <button
+            type="button"
+            className={styles.roleDisclosure}
+            aria-expanded={open === "courses"}
             aria-controls={panelId("courses")}
-            onClick={() => toggle("courses")}
-            {...toneFor("courses")}
+            onClick={() => onToggle("courses")}
           >
-            {courses.length === 1 ? "1 course to close it" : `${courses.length} courses to close it`}
-          </SpecularButton>
+            Courses ({courses.length})
+          </button>
+        ) : null}
+
+        {hasGuidance ? (
+          <button
+            type="button"
+            className={styles.roleDisclosure}
+            aria-expanded={open === "guidance"}
+            aria-controls={panelId("guidance")}
+            onClick={() => onToggle("guidance")}
+          >
+            Improve Your Match
+          </button>
         ) : null}
       </div>
 
-      {hasOpenings && open.has("openings") ? (
-        <div id={panelId("openings")} className={styles.inlineDetailBody}>
+      {hasOpenings && open === "openings" ? (
+        <div id={panelId("openings")} className={cn(styles.inlineDetailBody, styles.roleDetailBody)}>
           <OpeningBadges openings={openings} gap={role.openingsGap} className="mt-1" />
         </div>
       ) : null}
 
-      {hasRationale && open.has("rationale") ? (
-        <div id={panelId("rationale")} className={styles.inlineDetailBody}>
-          <p className="text-[13px] leading-relaxed text-ink-2">{role.rationale}</p>
-        </div>
-      ) : null}
-
-      {hasGuidance && open.has("guidance") ? (
-        <div id={panelId("guidance")} className={styles.inlineDetailBody}>
-          {/* Deliberately says "compares", not "is the cosine similarity of":
-              the framework tier scores by embedding and the reasoned tier by
-              the model's own judgement, and this line has to stay true of both. */}
-          <p className="text-[12.5px] leading-relaxed text-ink-muted">
-            {role.matchScore}/100 is how closely your resume reads against what
-            this role asks for. Evidencing the items below is what moves it.
-          </p>
-
+      {hasGuidance && open === "guidance" ? (
+        <div id={panelId("guidance")} className={cn(styles.inlineDetailBody, styles.roleDetailBody)}>
           {strengths.length > 0 ? (
-            <div className="mt-4">
+            <div>
               <SectionLabel>What is already carrying it</SectionLabel>
               <ul className="mt-2 space-y-1.5" role="list">
                 {strengths.map((strength) => (
@@ -216,13 +168,9 @@ function RoleDisclosures({ role }: { role: MatchedRole }) {
         </div>
       ) : null}
 
-      {hasCourses && open.has("courses") ? (
-        <div id={panelId("courses")} className={styles.inlineDetailBody}>
-          <p className="text-[12.5px] leading-relaxed text-ink-muted">
-            SkillsFuture courses matched to the gaps above. Each lists the gap it
-            answers.
-          </p>
-          <div className="mt-3">
+      {hasCourses && open === "courses" ? (
+        <div id={panelId("courses")} className={cn(styles.inlineDetailBody, styles.roleDetailBody)}>
+          <div>
             <CourseRecommendations courses={courses} />
           </div>
         </div>
@@ -266,6 +214,7 @@ export function AdvisorStage({
 }) {
   const { plan, advice, improvement, profile } = analysis;
   const [showAllRewrites, setShowAllRewrites] = useState(false);
+  const [openRoleDisclosure, setOpenRoleDisclosure] = useState<OpenRoleDisclosure>(null);
 
   const paths = useMemo(
     () => [...plan.paths].sort((a, b) => b.matchScore - a.matchScore),
@@ -327,10 +276,10 @@ export function AdvisorStage({
                 <article key={role.id} className={styles.role}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[15px] font-semibold text-ink">
+                      <p className="text-[18px] font-semibold leading-snug tracking-[-0.015em] text-ink">
                         {role.title}
                       </p>
-                      <p className="mt-0.5 text-[12.5px] text-ink-muted">
+                      <p className="mt-1 text-[13.5px] leading-relaxed text-ink-muted">
                         {role.sector}
                         {role.salary
                           ? ` · ${formatCompactMoney(role.salary.low)}–${formatCompactMoney(role.salary.high)} / month`
@@ -345,11 +294,19 @@ export function AdvisorStage({
                       className="w-32 shrink-0"
                     />
                   </div>
-                  {/* Openings come first. Someone scanning matched roles is
-                      readier to act on "here is a vacancy" than to read why
-                      the role suits them, and the rationale is still one
-                      click away directly below. */}
-                  <RoleDisclosures role={role} />
+                  {/* Openings come first because someone scanning matched roles
+                      is readier to act on a vacancy than to inspect next steps. */}
+                  <RoleDisclosures
+                    role={role}
+                    open={openRoleDisclosure?.roleId === role.id ? openRoleDisclosure.key : null}
+                    onToggle={(key) =>
+                      setOpenRoleDisclosure((current) =>
+                        current?.roleId === role.id && current.key === key
+                          ? null
+                          : { roleId: role.id, key },
+                      )
+                    }
+                  />
                 </article>
               ))}
             </div>

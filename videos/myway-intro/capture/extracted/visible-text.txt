@@ -1,0 +1,17 @@
+MyWay
+
+A personalized career coach.
+
+One resume. Six agentic AI agents. A connected career plan.
+
+The six agents are Resume Parser, Questionnaire Agent, Career Planner,
+Resume Improver, Industry Advisor, and Career Swapper.
+
+MyWay turns a resume into grounded career paths, skill gaps, resume rewrites,
+live role matches, and a contextual analysis chatbot that can explain the plan.
+
+Core product language from the app:
+- Understand your experience, with context.
+- Map paths, not job listings.
+- Act on advice from specialists.
+- Your career, mapped around you.

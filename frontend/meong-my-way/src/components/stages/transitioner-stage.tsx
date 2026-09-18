@@ -3,7 +3,6 @@
 import {
   ClipboardCheck,
   Compass,
-  Layers,
   MessageCircleQuestion,
   MessagesSquare,
 } from "lucide-react";
@@ -17,7 +16,7 @@ import type {
   CareerSwap,
   SwapRequestState,
 } from "@/lib/contracts";
-import { Button, Card, Chip, SectionLabel } from "@/components/ui/primitives";
+import { Button, Card, SectionLabel } from "@/components/ui/primitives";
 import { ComparePaths } from "@/components/ui/compare-paths";
 import { SkeletonBar } from "@/components/ui/agent-trace";
 import { cn } from "@/lib/utils";
@@ -27,8 +26,7 @@ import { cn } from "@/lib/utils";
  *
  * Deliberately thinner than the advisor branch. Someone considering a switch
  * needs to compare a handful of destinations honestly, not read three agents'
- * worth of commentary; the portable-skills list and each path's gaps are what
- * carry the decision.
+ * worth of commentary; each path's fit and gaps carry the decision.
  *
  * Destinations reuse `ComparePaths` rather than getting their own layout, so a
  * pivot is presented in the same terms as a promotion: same rows, same order,
@@ -319,33 +317,6 @@ export function TransitionerStage({
 
           <BasisNote swap={swap} />
 
-          </> },
-          { id: "skills", label: "Your skills", icon: <Layers />, content: <>
-            <h2 className="text-xl font-semibold">Take your experience with you</h2>
-          {swap.note ? (
-            <p className="mt-5 max-w-prose text-[14px] leading-relaxed text-ink-2">
-              {swap.note}
-            </p>
-          ) : null}
-
-          {swap.portableSkills.length > 0 ? (
-            <Card className="mt-7 p-5">
-              <SectionLabel>What travels with you</SectionLabel>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
-                Skills shared across your suggested destinations.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {swap.portableSkills.map((skill) => (
-                  <Chip key={skill} tone="accent">
-                    {skill}
-                  </Chip>
-                ))}
-              </div>
-            </Card>
-          ) : null}
-
-
-            {swap.portableSkills.length === 0 ? <p className="mt-4 text-sm text-ink-2">No shared skills were identified. Check each destination for its individual skill matches.</p> : null}
           </> },
           ...(swap.coaches.length > 0 ? [{ id: "coaching", label: "Talk to a coach", icon: <MessagesSquare />, content: <TalkToSomeone swap={swap} /> }] : []),
           ]} />
